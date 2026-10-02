@@ -1,0 +1,103 @@
+# Bulletin configuration.
+# Everything region-specific lives here, so the code stays the same
+# when you point it at another country.
+
+region:
+  name: Yemen
+  boundary_collection: "WM/geoLab/geoBoundaries/600/ADM1"
+  filter_property: shapeGroup
+  filter_value: YEM
+
+bulletin:
+  title: "Yemen Seasonal Monitoring"
+  # Which month this bulletin reports on.
+  #
+  # Leave both blank and it is worked out from what Earth Engine actually
+  # holds: the most recent month that every dataset fully covers. CHIRPS
+  # usually decides, since it runs about four weeks behind.
+  #
+  # Fill both in to rebuild an older bulletin.
+  year:
+  month:
+
+# Each variable becomes one slide: a 2x2 grid of
+# [top row]    the standardized anomaly at 1-month and 3-month
+# [bottom row] a second view at 1-month and 3-month
+layers:
+  - key: rainfall
+    label: Rainfall
+    source_label: "CHIRPS"
+    source_detail: "CHIRPS (UCSB-CHG/CHIRPS/DAILY)"
+    collection: "UCSB-CHG/CHIRPS/DAILY"
+    band: precipitation
+    clim_start: 1981
+    clim_end: 2025
+    palette: ["B78200", "FFFFFF", "0027FF"]
+    second_row: anomaly_pct
+
+  - key: soil_moisture
+    label: Soil Moisture
+    source_label: "SMAP L3 Enhanced"
+    source_detail: "SMAP L3 Enhanced (NASA/SMAP/SPL3SMP_E/005, NASA/SMAP/SPL3SMP_E/006)"
+    # Two collections merged. 005 holds the historical record, 006 carries
+    # it on from 2024. Loading only 006 silently shrinks the baseline to a
+    # couple of years, which quietly corrupts every anomaly.
+    collection:
+      - "NASA/SMAP/SPL3SMP_E/005"
+      - "NASA/SMAP/SPL3SMP_E/006"
+    band: soil_moisture_am
+    clim_start: 2016
+    clim_end: 2025
+    palette: ["B78200", "FFFFFF", "0027FF"]
+    second_row: anomaly_pct
+
+  - key: vegetation
+    label: Vegetation
+    source_label: "VIIRS NDVI"
+    source_detail: "VIIRS NDVI (NASA/VIIRS/002/VNP13A1)"
+    collection: "NASA/VIIRS/002/VNP13A1"
+    band: NDVI
+    clim_start: 2013
+    clim_end: 2025
+    palette: ["a36437", "FCD163", "207401"]
+    second_row: vci
+
+# Trailing window lengths, in days. 1-month and 3-month.
+windows:
+  - { key: "1month", label: "1-month", days: 30 }
+  - { key: "3month", label: "3-month", days: 90 }
+
+# Optional forecast slide. Drop screenshots into this folder and list them
+# here, or leave the list empty to skip the slide entirely. These come from
+# the PyCPT maproom, not Earth Engine, so they stay manual for now.
+forecasts:
+  heading: "Forecasts (From Design Dashboard)"
+  note: "Initial PyCPT Forecast for JAS Season - https://iridl.ldeo.columbia.edu/fbfmaproom2/yemen"
+  dir: forecasts
+  images: []
+  # images:
+  #   - { file: april.png, caption: "Issued April Lead Time" }
+  #   - { file: may.png,   caption: "Issued May Lead Time" }
+  #   - { file: june.png,  caption: "Issued June Lead Time" }
+
+method_text: >-
+  Standardized values are z-scores: the period mean minus the long-term mean
+  for the same period, divided by the year-to-year standard deviation of that
+  period mean. They are not gamma-fitted SPI, so standard SPI drought category
+  thresholds do not apply. Percentage values are departure from normal, where
+  0 means normal. VCI is a 0-100 position between the best and worst on record
+  for each pixel. Windows are trailing: a 3-month figure covers the reported
+  month and the two preceding it. Values are standardized against the full
+  climatological record, the conventional approach.
+
+disclaimer_text: >-
+  Content is based on the most recent remote sensing data available at the time
+  of publication. Conditions are dynamic and may not fully reflect the situation
+  on the ground. Standardized values are z-scores relative to the stated
+  climatological period, not gamma-fitted SPI, so standard SPI drought category
+  thresholds do not apply.
+
+output:
+  dir: output
+  # Pixel width of the rendered map pulled from Earth Engine.
+  map_width_px: 900
