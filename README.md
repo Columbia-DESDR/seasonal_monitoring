@@ -161,3 +161,22 @@ way, with matplotlib, so the panels drop into the same slots.
 `.env`, any `*.json` credentials and the `output/` folder are gitignored.
 Never commit a service account key. If one is ever pushed, rotate it rather
 than deleting the file, because git keeps history.
+
+## Converting PyCPT forecasts to GeoTIFF
+
+`pycpt_to_geotiff.py` turns PyCPT NetCDF output into a multiband GeoTIFF
+(one band per year, band names are the years) for ingestion into Earth Engine.
+
+    python pycpt_to_geotiff.py mu  MME_deterministic_hindcasts.nc output/hindcast_mu.tif
+    python pycpt_to_geotiff.py var MME_hindcast_prediction_error_variance.nc output/hindcast_var.tif
+    python pycpt_to_geotiff.py mu  MME_deterministic_forecast_2026.nc output/forecast_mu_2026.tif
+
+- `mu` reads the `deterministic` variable; `var` reads `prediction_error_variance`.
+  Mean and variance are always written to separate files.
+- Works for multi-year hindcasts and for a single new forecast (a `T` of length 1,
+  or no `T` at all; in that case pass `--years 2026`).
+- Years are read from `T` unless `--years` is given.
+- Latitude is sorted north-to-south; missing values (NaN or -999) become NaN nodata.
+- CRS is assumed to be EPSG:4326 (plain lon/lat degrees). The Ethiopia OND test files
+  are consistent with this, but the files carry no CRS metadata.
+- Tests: `python -m pytest -v`
