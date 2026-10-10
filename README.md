@@ -1,18 +1,13 @@
 # Yemen bulletin generator
 
-Builds the seasonal monitoring bulletin as a PowerPoint deck, in the same
-shape as the one Nitin assembled by hand for OCHA: a title page, one slide
-per variable with a 2x2 grid of maps, and a sources and method page.
+Builds the seasonal monitoring bulletin as a PowerPoint deck: a title page, one slide per variable with a 2x2 grid of maps, and a sources and method page. It follows the layout of the existing manually assembled bulletin.
 
-Two steps, deliberately separate:
+The pipeline has two separate steps, so slides can be rebuilt without re-querying Earth Engine:
 
 ```
 fetch.py       Earth Engine  ->  maps + manifest.json in output/
 build_deck.py  manifest.json ->  .pptx (and .pdf with --pdf)
 ```
-
-Keeping them apart means you can redo the slides as often as you like
-without re-hitting Earth Engine, which is the slow part.
 
 ## Setup
 
@@ -20,163 +15,82 @@ without re-hitting Earth Engine, which is the slow part.
 python3 -m venv venv
 source venv/bin/activate          # Windows: venv\Scripts\activate
 pip install -r requirements.txt
-
-cp .env.example .env              # then fill in EE_PROJECT
+cp .env.example .env              # set EE_PROJECT
 ```
 
-## Try the deck half first
-
-Earth Engine authentication is the fiddly part, so you can skip it to start:
+To test the layout without Earth Engine:
 
 ```bash
-python make_placeholders.py       # fake maps, no Earth Engine
+python make_placeholders.py
 python build_deck.py
 ```
 
-That proves the layout works before you fight with auth.
+## Running with Earth Engine
 
-## Then the real thing
-
-One-time Earth Engine authentication:
+Authenticate once, using a Google Cloud project registered for Earth Engine with the API enabled. Set its id as `EE_PROJECT` in `.env`.
 
 ```bash
 python -c "import ee; ee.Authenticate()"
-```
-
-Your Google Cloud project also needs to be registered for Earth Engine with
-the API enabled. Put the project id in `.env` as `EE_PROJECT`.
-
-```bash
-rm -rf output                     # clear the placeholders
+rm -rf output                     # remove placeholders
 python fetch.py
 python build_deck.py --pdf
 ```
 
-## What each slide holds
+## Slide layout
 
-Every variable gets one slide, laid out as a 2x2 grid:
+Each variable has one slide with a 2x2 grid. Windows are trailing, so the 3-month panel covers the reported month and the two before it.
 
 |  | 1-month | 3-month |
 |---|---|---|
 | **top row** | standardized anomaly | standardized anomaly |
 | **bottom row** | % departure from normal | % departure from normal |
 
-Vegetation swaps the bottom row for VCI, which is what the existing
-bulletin does. That choice is the `second_row` key in the config.
+Vegetation uses VCI in the bottom row (`second_row` in the config).
 
-Windows are trailing, so the 3-month figure covers the reported month and
-the two before it.
+## Configuration
 
-## Changing what gets built
+`config.yaml` holds the country, month, variables (datasets, baseline years, palettes, bottom row) and boilerplate text. Targeting another country should only require editing this file.
 
-Everything lives in `config.yaml`: which country, which month, and the three
-variables with their datasets, baseline years, palettes and bottom row.
+## Reporting month
 
-Pointing this at another country should mean editing that file and nothing
-else. That is the main thing worth testing once Yemen works.
+By default `fetch.py` queries Earth Engine for the data coverage of each dataset and reports on the most recent month fully covered by all of them. A month counts as covered only when data reaches its last day, so data through 29 September still gives an August bulletin. The dataset with the largest lag (usually CHIRPS, about four weeks) determines the month. The chosen month and the limiting dataset are printed on each run.
 
-## Which month it reports on
+To rebuild an earlier bulletin, set both `bulletin.year` and `bulletin.month` in the config. The "data through" line on each slide shows the newest data in that dataset.
 
-Not configured. `fetch.py` asks Earth Engine what each dataset actually
-holds, and reports on the most recent month that **all** of them fully
-cover. Every slide has to describe the same month, so the dataset that lags
-most decides, and that is normally CHIRPS, which runs about four weeks
-behind.
+## Forecast slide
 
-A month only counts as covered when the data reaches its last day. Data
-through 29 September still means an August bulletin, because September is
-incomplete.
-
-It prints what it chose and why:
-
-```
-Checking data availability ...
-  Rainfall: data through 2026-08-31
-  Soil Moisture: data through 2026-09-29
-  Vegetation: data through 2026-09-06
-
-Reporting month: August 2026
-  limited by Rainfall, which has data through 2026-08-31
-```
-
-To rebuild an older bulletin, set both `bulletin.year` and `bulletin.month`
-in the config. That overrides the automatic choice. Leave them blank for
-normal runs.
-
-The "data through" line on each slide is the newest data in that dataset,
-not the end of the window shown. Worth confirming with Max that this is the
-reading he wants, since the existing bulletin is ambiguous about it.
-
-## The forecast slide
-
-The existing bulletin opens with PyCPT forecast maps from the maproom, which
-is not Earth Engine, so they cannot be pulled the same way. Drop the
-screenshots into `forecasts/`, list them under `forecasts.images` in the
-config, and the slide gets built. Leave the list empty and the slide is
-skipped.
-
-Automating that one properly is a separate question for Max.
+PyCPT forecast maps come from the maproom rather than Earth Engine. Place screenshots in `forecasts/` and list them under `forecasts.images` in the config. If the list is empty, the slide is skipped.
 
 ## Files
 
-| File | What it does |
+| File | Purpose |
 |---|---|
-| `config.yaml` | Region, month, variables, boilerplate text. The only file you should normally edit. |
-| `fetch.py` | Talks to Earth Engine, computes anomalies, saves the maps. |
-| `build_deck.py` | Adds titles and colour bars, then assembles the deck. |
-| `bands.py` | Titles and value ranges for each kind of panel. |
-| `make_placeholders.py` | Fake data for working on layout offline. |
+| `config.yaml` | Region, month, variables, boilerplate text |
+| `fetch.py` | Computes anomalies in Earth Engine and saves the maps |
+| `build_deck.py` | Adds titles and colour bars, assembles the deck |
+| `bands.py` | Titles and value ranges for each panel type |
+| `make_placeholders.py` | Placeholder maps for offline layout work |
+| `pycpt_to_geotiff.py` | Converts PyCPT NetCDF output to GeoTIFF |
 
-## How this relates to the GEE scripts
+## Relation to the GEE scripts
 
-The `yemen_*_monitoring` scripts in `users/maxmauerman/wfp_yemen` each compute
-a standardized anomaly and export rendered images to the Drive folder
-`yemen_bulletin_exports`. `fetch.py` does the same calculation through the
-Python API and pulls the rendered map directly over HTTP, so Drive is not
-involved.
-
-There are six of those scripts because the calculation is repeated per
-variable and per window length. Here it is one function, with the dataset,
-baseline years and window length as arguments.
-
-In the existing deck the panel titles and colour bars are baked into the
-picture rather than being slide text. `build_deck.py` draws them the same
-way, with matplotlib, so the panels drop into the same slots.
-
-## Open questions for Max
-
-- The GEE scripts build the historical mean from every available year,
-  including the one being monitored, while the standard deviation uses an
-  explicit baseline list. This code uses the same baseline years for both,
-  so numbers will differ slightly from the Code Editor output. Worth
-  confirming which is intended before anyone compares the two.
-- `yemen_seasonal_forecast_monitoring` has a typo, `empty.painat(...)` where
-  it should be `paint`, which stops the script running.
-- The page numbers in the existing deck repeat 2 twice. Fixed here.
-- Should the deck land somewhere shared rather than a local folder, and
-  should this run on a schedule under a service account?
+The `yemen_*_monitoring` scripts in `users/maxmauerman/wfp_yemen` each compute a standardized anomaly and export images to Drive. `fetch.py` performs the same calculation through the Python API and downloads the rendered maps directly over HTTP. The six per-variable, per-window scripts are replaced by one function parameterized by dataset, baseline years and window length. Panel titles and colour bars are drawn with matplotlib to match the existing deck.
 
 ## Security
 
-`.env`, any `*.json` credentials and the `output/` folder are gitignored.
-Never commit a service account key. If one is ever pushed, rotate it rather
-than deleting the file, because git keeps history.
+`.env`, `*.json` credentials and `output/` are gitignored. Never commit a service account key. If one is pushed, rotate it rather than deleting the file, because git keeps history.
 
 ## Converting PyCPT forecasts to GeoTIFF
 
-`pycpt_to_geotiff.py` turns PyCPT NetCDF output into a multiband GeoTIFF
-(one band per year, band names are the years) for ingestion into Earth Engine.
+`pycpt_to_geotiff.py` converts PyCPT NetCDF output to a multiband GeoTIFF (one band per year, band names are the years) for Earth Engine ingestion.
 
     python pycpt_to_geotiff.py mu  MME_deterministic_hindcasts.nc output/hindcast_mu.tif
     python pycpt_to_geotiff.py var MME_hindcast_prediction_error_variance.nc output/hindcast_var.tif
     python pycpt_to_geotiff.py mu  MME_deterministic_forecast_2026.nc output/forecast_mu_2026.tif
 
-- `mu` reads the `deterministic` variable; `var` reads `prediction_error_variance`.
-  Mean and variance are always written to separate files.
-- Works for multi-year hindcasts and for a single new forecast (a `T` of length 1,
-  or no `T` at all; in that case pass `--years 2026`).
+- `mu` reads `deterministic`; `var` reads `prediction_error_variance`. Mean and variance are written to separate files.
+- Supports multi-year hindcasts and single forecasts (`T` of length 1, or no `T`; pass `--years 2026` in the latter case).
 - Years are read from `T` unless `--years` is given.
-- Latitude is sorted north-to-south; missing values (NaN or -999) become NaN nodata.
-- CRS is assumed to be EPSG:4326 (plain lon/lat degrees). The Ethiopia OND test files
-  are consistent with this, but the files carry no CRS metadata.
+- Latitude is sorted north to south. Missing values (NaN or -999) become NaN nodata.
+- The CRS is assumed to be EPSG:4326 (plain lon/lat). The Ethiopia OND test files are consistent with this but contain no CRS metadata.
 - Tests: `python -m pytest -v`
