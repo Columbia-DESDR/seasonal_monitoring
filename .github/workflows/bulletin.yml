@@ -1,0 +1,64 @@
+name: Monthly bulletin
+
+on:
+  # A button in the Actions tab, so you can run it on demand while testing.
+  workflow_dispatch:
+  schedule:
+    # 10th of each month at 13:00 UTC. CHIRPS runs roughly four weeks behind,
+    # so by the 10th the previous month is reliably complete. fetch.py works
+    # out the reporting month itself, so this date only has to be late enough.
+    - cron: "0 13 10 * *"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install LibreOffice
+        # Only needed for the --pdf step. Impress alone rather than the whole
+        # office suite, which saves a couple of minutes per run.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libreoffice-impress
+
+      - name: Write the service account key
+        # The secret holds the JSON itself, but fetch.py expects a path, so
+        # it gets written to the runner's temp dir. Passing it through env
+        # rather than inlining it into the shell keeps the contents out of
+        # the command line and out of the logs.
+        env:
+          KEY_JSON: ${{ secrets.EE_SERVICE_ACCOUNT_KEY_JSON }}
+        run: |
+          printf '%s' "$KEY_JSON" > "$RUNNER_TEMP/ee-key.json"
+          chmod 600 "$RUNNER_TEMP/ee-key.json"
+
+      - name: Fetch from Earth Engine
+        env:
+          EE_PROJECT: desdr-510913
+          EE_SERVICE_ACCOUNT_EMAIL: seasonal-monitoring@desdr-510913.iam.gserviceaccount.com
+          EE_SERVICE_ACCOUNT_KEY: ${{ runner.temp }}/ee-key.json
+        run: python fetch.py
+
+      - name: Build the deck
+        run: python build_deck.py --pdf
+
+      - name: Upload the bulletin
+        uses: actions/upload-artifact@v4
+        with:
+          name: bulletin
+          path: |
+            output/*.pptx
+            output/*.pdf
+          if-no-files-found: error
+          retention-days: 90
