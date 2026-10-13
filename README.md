@@ -1,7 +1,7 @@
 # Yemen bulletin generator
 
 Builds the seasonal monitoring bulletin as a PowerPoint deck, in the same
-shape as the one Nitin assembled by hand for OCHA: a title page, one slide
+shape as the version previously assembled by hand: a title page, one slide
 per variable with a 2x2 grid of maps, and a sources and method page.
 
 Two steps, deliberately separate:
@@ -13,6 +13,20 @@ build_deck.py  manifest.json ->  .pptx (and .pdf with --pdf)
 
 Keeping them apart means you can redo the slides as often as you like
 without re-hitting Earth Engine, which is the slow part.
+
+## Just want the bulletin?
+
+Then skip all of this. It builds itself every month and you can download
+the result, with nothing installed and nothing to sign into.
+
+1. Actions tab in this repo
+2. **Monthly bulletin** in the left sidebar
+3. Open the most recent run, or press **Run workflow** for a fresh one,
+   which takes about four minutes
+4. On the run's Summary page, scroll to the bottom to **Artifacts**
+5. Download, unzip, and the .pptx and .pdf are both in there
+
+The rest of this README is for changing how the bulletin is built.
 
 ## Setup
 
@@ -37,20 +51,56 @@ That proves the layout works before you fight with auth.
 
 ## Then the real thing
 
-One-time Earth Engine authentication:
+Two ways to reach Earth Engine. Pick one.
+
+### With the service account (recommended)
+
+Nothing to sign into. The key file is the credential, so there is no browser
+step and no gcloud involved. This is also what the scheduled run uses, so
+testing this way tests what actually runs.
+
+Put three lines in `.env`:
+
+```
+EE_PROJECT=desdr-510913
+EE_SERVICE_ACCOUNT_EMAIL=seasonal-monitoring@desdr-510913.iam.gserviceaccount.com
+EE_SERVICE_ACCOUNT_KEY=/absolute/path/to/your-key.json
+```
+
+`EE_SERVICE_ACCOUNT_KEY` is a **path to the .json file**, not the email. Get
+the key from the Keys tab of the service account in the Cloud console, and
+keep it outside the repo. Both lines are needed: with only one set, the code
+ignores the service account and signs in as you instead, which works on your
+laptop and nowhere else.
+
+### As yourself
 
 ```bash
 python -c "import ee; ee.Authenticate()"
 ```
 
-Your Google Cloud project also needs to be registered for Earth Engine with
-the API enabled. Put the project id in `.env` as `EE_PROJECT`.
+Only for this route, and only once. Leave the two service account lines
+blank or it will be used instead.
+
+This shells out to gcloud, so it inherits gcloud's problems. If you see
+`ModuleNotFoundError: No module named 'imp'`, your gcloud is older than your
+Python: `imp` was removed in Python 3.12 and older gcloud releases still
+import it. Either point gcloud at an older interpreter, with
+`export CLOUDSDK_PYTHON=/usr/bin/python3` in your shell profile, or update
+the Cloud SDK. Or sidestep gcloud altogether with
+`ee.Authenticate(auth_mode='notebook')`, which does the browser flow
+directly. None of this applies on the service account route.
+
+### Running it
 
 ```bash
 rm -rf output                     # clear the placeholders
 python fetch.py
 python build_deck.py --pdf
 ```
+
+The first line of output says which credential was used. Worth a glance:
+`service account` or `personal login`.
 
 ## What each slide holds
 
@@ -104,18 +154,34 @@ in the config. That overrides the automatic choice. Leave them blank for
 normal runs.
 
 The "data through" line on each slide is the newest data in that dataset,
-not the end of the window shown. Worth confirming with Max that this is the
-reading he wants, since the existing bulletin is ambiguous about it.
+not the end of the window shown. The hand-made bulletin was ambiguous about
+which it meant, so this is worth confirming before anyone reads too much
+into it.
 
-## The forecast slide
+## The scheduled run
 
-The existing bulletin opens with PyCPT forecast maps from the maproom, which
-is not Earth Engine, so they cannot be pulled the same way. Drop the
-screenshots into `forecasts/`, list them under `forecasts.images` in the
-config, and the slide gets built. Leave the list empty and the slide is
-skipped.
+`.github/workflows/bulletin.yml` runs the whole thing on the 10th of each
+month, plus a button for running it on demand. The 10th because CHIRPS lags
+about four weeks, so by then the previous month is reliably complete.
+`fetch.py` works out the reporting month itself, so that date only has to be
+late enough.
 
-Automating that one properly is a separate question for Max.
+What a run does: installs the dependencies and LibreOffice, writes the
+service account key to a temp file, then `fetch.py` and `build_deck.py --pdf`.
+The deck and the PDF are uploaded as artifacts and kept for 90 days.
+
+It signs in with the service account, so it is not tied to anyone's Google
+account and keeps working whoever is around. The key lives in the repo's
+**Settings, Secrets and variables, Actions** as `EE_SERVICE_ACCOUNT_KEY_JSON`,
+holding the whole .json file as text. GitHub encrypts it and it cannot be
+read back out, only replaced. The project id and the account email are in
+the workflow file in plain text, which is fine: neither is a secret.
+
+To change the schedule, edit the `cron` line. To stop it running
+automatically while keeping the button, delete the `schedule` block.
+
+A failed run emails whoever triggered it. Worth checking the Actions tab
+around the 11th if nobody has seen a bulletin.
 
 ## Files
 
@@ -142,19 +208,6 @@ baseline years and window length as arguments.
 In the existing deck the panel titles and colour bars are baked into the
 picture rather than being slide text. `build_deck.py` draws them the same
 way, with matplotlib, so the panels drop into the same slots.
-
-## Open questions for Max
-
-- The GEE scripts build the historical mean from every available year,
-  including the one being monitored, while the standard deviation uses an
-  explicit baseline list. This code uses the same baseline years for both,
-  so numbers will differ slightly from the Code Editor output. Worth
-  confirming which is intended before anyone compares the two.
-- `yemen_seasonal_forecast_monitoring` has a typo, `empty.painat(...)` where
-  it should be `paint`, which stops the script running.
-- The page numbers in the existing deck repeat 2 twice. Fixed here.
-- Should the deck land somewhere shared rather than a local folder, and
-  should this run on a schedule under a service account?
 
 ## Security
 

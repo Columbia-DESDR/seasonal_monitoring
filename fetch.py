@@ -43,12 +43,32 @@ def initialize():
     sa_email = os.environ.get("EE_SERVICE_ACCOUNT_EMAIL")
 
     if key_file and sa_email:
+        if not Path(key_file).exists():
+            hint = ("\nThat looks like the service account email rather than "
+                    "a file path.\nCheck the two lines in .env are not "
+                    "swapped." if "@" in key_file else "")
+            raise SystemExit(
+                f"EE_SERVICE_ACCOUNT_KEY should point at a .json key file, "
+                f"but nothing is there:\n  {key_file}{hint}\n\n"
+                f"The key downloads from the Keys tab of the service account "
+                f"in the Cloud console."
+            )
         ee.Initialize(ee.ServiceAccountCredentials(sa_email, key_file),
                       project=project)
         print(f"Earth Engine ready (service account, project {project})")
-    else:
-        ee.Initialize(project=project)
-        print(f"Earth Engine ready (personal login, project {project})")
+        return
+
+    # Only one of the pair set is almost always a mistake, and falling
+    # through to a personal login hides it: the run works on the laptop of
+    # whoever set it up and fails everywhere else.
+    if key_file or sa_email:
+        missing = ("EE_SERVICE_ACCOUNT_EMAIL" if key_file
+                   else "EE_SERVICE_ACCOUNT_KEY")
+        print(f"  note: {missing} is not set, so the service account is "
+              f"being ignored.")
+
+    ee.Initialize(project=project)
+    print(f"Earth Engine ready (personal login, project {project})")
 
 
 def load_config(path="config.yaml"):
