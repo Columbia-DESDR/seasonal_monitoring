@@ -50,6 +50,12 @@ jobs:
           EE_SERVICE_ACCOUNT_KEY: ${{ runner.temp }}/ee-key.json
         run: python fetch.py
 
+      - name: Compute the forecast
+        # Reads PyCPT GeoTIFFs committed under forecasts/. Prints a notice
+        # and does nothing if they are absent, so the bulletin still builds
+        # without a forecast slide.
+        run: python forecast.py
+
       - name: Build the deck
         run: python build_deck.py --pdf
 

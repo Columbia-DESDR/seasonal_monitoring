@@ -67,18 +67,60 @@ windows:
   - { key: "1month", label: "1-month", days: 30 }
   - { key: "3month", label: "3-month", days: 90 }
 
-# Optional forecast slide. Drop screenshots into this folder and list them
-# here, or leave the list empty to skip the slide entirely. These come from
-# the PyCPT maproom, not Earth Engine, so they stay manual for now.
+# Optional forecast slide, computed from PyCPT output by forecast.py.
+#
+# These are GeoTIFFs on disk rather than Earth Engine assets, because nothing
+# uploads PyCPT output to Earth Engine yet. Once that pipeline exists this
+# section points at an asset instead. Clear the three file paths to skip the
+# forecast slide entirely.
+#
+# All three must share one grid: the threshold is taken from the hindcast and
+# compared against the forecast pixel by pixel, which only means anything if
+# they line up. Taking the threshold from the hindcast rather than from CHIRPS
+# is what keeps that true, and avoids reconciling two different resolutions
+# and two different unit conventions.
 forecasts:
-  heading: "Forecasts (From Design Dashboard)"
-  note: "Initial PyCPT Forecast for JAS Season - https://iridl.ldeo.columbia.edu/fbfmaproom2/yemen"
+  heading: "Seasonal Forecast"
+  season: "OND 2026"
+  note: "PyCPT 2.10.2, initialized September 2026. Drought threshold is the 20th percentile of the hindcast."
+  source_detail: "PyCPT 2.10.2 MME deterministic forecast and prediction error variance, hindcast 1983-2024"
   dir: forecasts
+  hindcast_mu: forecasts/hindcast_mu.tif
+  forecast_mu: forecasts/forecast_mu_2026.tif
+  forecast_var: forecasts/forecast_var_2026.tif
+
+  # What counts as a drought. The 20th percentile means the worst one year in
+  # five historically, which also makes 0.20 the probability you would expect
+  # from a forecast carrying no information. A policy choice, not a
+  # statistical one: lower covers rarer, more severe events.
+  threshold_percentile: 20
+
+  # Where the threshold is taken from. This should be OBSERVED seasonal
+  # rainfall, one band per year, on the same grid as the forecast, because
+  # PyCPT's prediction error variance is measured against observations.
+  #
+  # Left blank, forecast.py falls back to the hindcast and the probabilities
+  # come out too high: the hindcast holds the model's own predictions, and
+  # predictions regress toward the mean, so their spread is narrower than
+  # real rainfall and the percentile is not extreme enough. forecast.py
+  # measures the error on every run and marks the slide when it is large.
+  observed_rainfall:
+
+  # The PyCPT grid is 0.25 degrees, much coarser than the CHIRPS maps on the
+  # other slides, so drawn one square per cell it looks blocky beside them.
+  # Interpolating matches how the Code Editor displays the same data. Set
+  # false to see the model's real resolution.
+  smooth_maps: true
+
+  # Max's palette from the Code Editor, so the map reads the same way as the
+  # dashboard version: navy through green, yellow, orange, red.
+  probability_palette: ["001137", "0aab1e", "e7eb05", "ff4a2d", "e90000"]
+  departure_palette: ["B78200", "FFFFFF", "0027FF"]
+
+  # Fallback: static screenshots from the maproom, used only when the files
+  # above are absent. This is what the hand-made bulletin did.
   images: []
-  # images:
   #   - { file: april.png, caption: "Issued April Lead Time" }
-  #   - { file: may.png,   caption: "Issued May Lead Time" }
-  #   - { file: june.png,  caption: "Issued June Lead Time" }
 
 method_text: >-
   Standardized values are z-scores: the period mean minus the long-term mean

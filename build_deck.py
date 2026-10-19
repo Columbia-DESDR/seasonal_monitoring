@@ -55,22 +55,33 @@ PANEL_W, PANEL_H = 3.45, 2.56
 PANEL_X = (1.45, 6.79)
 PANEL_Y = (1.45, 4.55)
 
+# The forecast slide carries two panels side by side rather than a 2x2, so
+# they get more room. Proportions chosen so the map area comes out close to
+# the shape of the PyCPT grid and little is wasted on white margins.
+FC_PANEL_W, FC_PANEL_H = 4.30, 4.40
+FC_PANEL_X = (1.26, 6.13)
+FC_PANEL_Y = 1.55
+
 
 # ----------------------------------------------------------------------
 # Stage 1: compose each map into a titled panel with a colour bar
 # ----------------------------------------------------------------------
 
 def compose_panel(raw_path, title, palette, vmin, vmax, units, out_path,
-                  dpi=300):
+                  dpi=300, width=PANEL_W, height=PANEL_H):
     """Stack a title, the map, and a colour bar into one panel image.
 
     The maps that come back from Earth Engine are bare. In the existing
     bulletin the titles and colour bars are part of the picture rather than
     separate text boxes, so they are drawn here.
+
+    width and height are in inches and the panel is placed on the slide at
+    exactly that size, so the text stays the same physical size whichever
+    panel it lands in.
     """
     image = plt.imread(raw_path)
 
-    fig = plt.figure(figsize=(PANEL_W, PANEL_H), dpi=dpi)
+    fig = plt.figure(figsize=(width, height), dpi=dpi)
     fig.patch.set_facecolor("white")
 
     fig.text(0.5, 0.945, title, ha="center", va="center",
@@ -144,10 +155,57 @@ def title_slide(prs, manifest, month_label, contents):
     return slide
 
 
-def forecast_slide(prs, config, running_head, page_number, base_dir):
-    """Optional. Screenshots from the PyCPT maproom, which is not Earth Engine.
+def computed_forecast_slide(prs, forecast, running_head, page_number,
+                            raw_dir, panel_dir):
+    """The forecast slide built from forecast.py's output.
 
-    Skipped entirely when no images are listed in the config.
+    Two panels: the drought probability, and the forecast's departure from
+    normal that explains it. Composed the same way as every other panel, so
+    the titles and colour bars match the rest of the deck.
+    """
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    add_chrome(slide, running_head, page_number)
+
+    add_text(slide, forecast.get("heading", "Seasonal Forecast"),
+             TITLE["left"], TITLE["top"], TITLE["width"], TITLE["height"],
+             size=TITLE["size"], bold=True)
+
+    subtitle = (f"{forecast['season']} | "
+                f"hindcast {forecast['hindcast_start']}-{forecast['hindcast_end']} | "
+                f"drought threshold at the "
+                f"{forecast['threshold_percentile']}th percentile of "
+                f"{forecast.get('threshold_source', 'the hindcast')}")
+    add_text(slide, subtitle,
+             SUBTITLE["left"], SUBTITLE["top"],
+             SUBTITLE["width"], SUBTITLE["height"],
+             size=SUBTITLE["size"], color=MUTED)
+
+    for i, panel in enumerate(forecast["panels"][:2]):
+        name = panel["raw_image"]
+        compose_panel(
+            raw_dir / name,
+            panel["title"], panel["palette"],
+            panel["min"], panel["max"], panel["units"],
+            panel_dir / name,
+            width=FC_PANEL_W, height=FC_PANEL_H,
+        )
+        slide.shapes.add_picture(str(panel_dir / name),
+                                 Inches(FC_PANEL_X[i]), Inches(FC_PANEL_Y),
+                                 Inches(FC_PANEL_W), Inches(FC_PANEL_H))
+
+    if forecast.get("note"):
+        add_text(slide, forecast["note"],
+                 0.60, FC_PANEL_Y + FC_PANEL_H + 0.22, 10.49, 0.30,
+                 size=8, color=MUTED)
+    return True
+
+
+def screenshot_forecast_slide(prs, config, running_head, page_number,
+                              base_dir):
+    """Fallback. Screenshots from the PyCPT maproom, placed as pictures.
+
+    This is what the hand-made bulletin did. Used only when no computed
+    forecast is available.
     """
     forecasts = config.get("forecasts") or {}
     images = forecasts.get("images") or []
@@ -210,7 +268,8 @@ def variable_slide(prs, slide_data, running_head, page_number, panel_dir):
     return slide
 
 
-def method_slide(prs, config, manifest, running_head, page_number):
+def method_slide(prs, config, manifest, running_head, page_number,
+                 forecast=None):
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     add_chrome(slide, running_head, page_number)
     add_text(slide, "Data sources and method",
@@ -226,6 +285,46 @@ def method_slide(prs, config, manifest, running_head, page_number):
                   f"Data through {slide_data['data_through']}.")
         add_text(slide, detail, 0.75, y + 0.28, 4.65, 0.60, size=8.5)
         y += 0.90
+
+    # The forecast goes in the right column. It has a different provenance
+    # from the monitoring layers, and saying so matters: these are model
+    # output rather than observations, and the threshold comes from the
+    # model's own history rather than from a rain gauge.
+    if forecast:
+        add_text(slide, "Seasonal forecast", 5.90, 1.40, 4.80, 0.40,
+                 size=10, bold=True)
+        detail = (f"{forecast.get('source_detail', '')}. "
+                  f"Season {forecast['season']}. "
+                  f"Hindcast {forecast['hindcast_start']}-"
+                  f"{forecast['hindcast_end']}.")
+        add_text(slide, detail, 6.05, 1.68, 4.65, 0.70, size=8.5)
+        add_text(slide,
+                 "Drought probability is the chance the forecast season "
+                 f"falls below the {forecast['threshold_percentile']}th "
+                 "percentile of the hindcast for that pixel, from a normal "
+                 "distribution centred on the forecast mean with the "
+                 "forecast prediction error variance as its spread. The "
+                 f"threshold makes {forecast['threshold_percentile'] / 100:.2f} "
+                 "the long-run base rate, so values above that are elevated "
+                 f"risk. Threshold taken from {forecast.get('threshold_source', '')}.",
+                 6.05, 2.45, 4.65, 1.10, size=8)
+
+        if not forecast.get("calibrated", True):
+            add_text(slide, "Known limitation", 5.90, 3.70, 4.80, 0.40,
+                     size=10, bold=True)
+            add_text(slide,
+                     "The prediction error variance is measured against "
+                     "observed rainfall, so the threshold should be too. "
+                     "Taken from the hindcast instead, it sits on the "
+                     "model's own predictions, whose year-to-year spread is "
+                     "narrower than reality's, so the percentile is not "
+                     "extreme enough. A forecast carrying no information "
+                     f"returns {forecast.get('null_probability')} here "
+                     f"rather than "
+                     f"{forecast['threshold_percentile'] / 100:.2f}, so "
+                     "every probability on the map reads high. The fix is "
+                     "an observed rainfall record on the forecast grid.",
+                     6.05, 3.98, 4.65, 1.80, size=8, color=MUTED)
 
     add_text(slide, "Method", 0.60, 4.25, 4.80, 0.40, size=10, bold=True)
     add_text(slide, config["method_text"], 0.75, 4.55, 4.65, 1.90, size=8)
@@ -262,6 +361,12 @@ def main():
     panel_dir = out_dir / "panels"
     panel_dir.mkdir(parents=True, exist_ok=True)
 
+    # Written by forecast.py when forecast files are configured. Absent is
+    # normal and just means no forecast slide.
+    forecast_path = out_dir / "forecast.json"
+    forecast = (json.loads(forecast_path.read_text())
+                if forecast_path.exists() else None)
+
     # Stage 1
     print("Composing panels ...")
     for slide_data in manifest["slides"]:
@@ -286,21 +391,27 @@ def main():
     running_head = f"{manifest['title']} | {month_label}"
 
     contents = []
-    if (config.get("forecasts") or {}).get("images"):
+    if forecast:
+        contents.append(forecast.get("heading", "Seasonal Forecast"))
+    elif (config.get("forecasts") or {}).get("images"):
         contents.append("Forecasts")
     contents += [s["label"] for s in manifest["slides"]]
 
     title_slide(prs, manifest, month_label, contents)
 
     page = 2
-    if forecast_slide(prs, config, running_head, page, base_dir):
+    if forecast:
+        computed_forecast_slide(prs, forecast, running_head, page,
+                                raw_dir, panel_dir)
+        page += 1
+    elif screenshot_forecast_slide(prs, config, running_head, page, base_dir):
         page += 1
 
     for slide_data in manifest["slides"]:
         variable_slide(prs, slide_data, running_head, page, panel_dir)
         page += 1
 
-    method_slide(prs, config, manifest, running_head, page)
+    method_slide(prs, config, manifest, running_head, page, forecast)
 
     slug = re.sub(r"[^a-z0-9]+", "_", manifest["region"].lower()).strip("_")
     pptx_path = out_dir / f"{slug}_bulletin_{manifest['year']}_{manifest['month']:02d}.pptx"
