@@ -1,4 +1,7 @@
 earthengine-api>=1.4.0
+# 1.22 for percentile(method=...), which is how the drought threshold is
+# made to agree with Earth Engine's own percentile.
+numpy>=1.22
 requests>=2.31
 matplotlib>=3.7
 python-pptx>=1.0
