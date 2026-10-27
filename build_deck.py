@@ -35,8 +35,8 @@ from pptx.util import Emu, Inches, Pt
 
 
 # ----------------------------------------------------------------------
-# Layout. All inches. Lifted from the bulletin deck Nitin built, so the
-# output lands in the same places as the version WFP already receives.
+# Layout. All inches. Measured off the hand-made bulletin, so the output
+# lands in the same places as the version WFP already receives.
 # ----------------------------------------------------------------------
 
 SLIDE_W_EMU = 10688638      # 11.69 in, A4 landscape
@@ -61,6 +61,11 @@ PANEL_Y = (1.45, 4.55)
 FC_PANEL_W, FC_PANEL_H = 4.30, 4.40
 FC_PANEL_X = (1.26, 6.13)
 FC_PANEL_Y = 1.55
+
+# The charts are wider than they are tall, unlike the maps, so they get
+# their own height. Placing them in the map slot would stretch them.
+FC_CHART_H = 3.20
+FC_CHART_Y = 1.70
 
 
 # ----------------------------------------------------------------------
@@ -197,6 +202,77 @@ def computed_forecast_slide(prs, forecast, running_head, page_number,
         add_text(slide, forecast["note"],
                  0.60, FC_PANEL_Y + FC_PANEL_H + 0.22, 10.49, 0.30,
                  size=8, color=MUTED)
+    return True
+
+
+def forecast_chart_slide(prs, forecast, running_head, page_number, raw_dir,
+                         charts=None, label=None, has_conditional=None):
+    """How the season is tracking, and the spread of trigger
+    probabilities, for one area.
+
+    Separate from the maps because these answer a different question. The
+    maps say where; these say whether, and they are read as numbers rather
+    than as geography. Returns False when forecast.py had nothing to draw,
+    which is the normal state before CHIRPS has been pulled.
+
+    Pass charts and label to draw one admin unit instead of the whole
+    country. The slide is otherwise identical, which is the point: a
+    governorate should be readable the same way as the country.
+    """
+    if charts is None:
+        charts = forecast.get("chart_panels") or []
+        has_conditional = forecast.get("has_conditional")
+    if not charts:
+        return False
+
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    add_chrome(slide, running_head, page_number)
+
+    heading = forecast.get("heading", "Seasonal Forecast")
+    add_text(slide, f"{label}: season to date" if label
+             else f"{heading}: season to date",
+             TITLE["left"], TITLE["top"], TITLE["width"], TITLE["height"],
+             size=TITLE["size"], bold=True)
+    add_text(slide,
+             f"{forecast['season']} | "
+             f"{'average over ' + label if label else 'country average'} | "
+             f"threshold at the {forecast['threshold_percentile']}th "
+             f"percentile of {forecast.get('threshold_source', '')}",
+             SUBTITLE["left"], SUBTITLE["top"],
+             SUBTITLE["width"], SUBTITLE["height"],
+             size=SUBTITLE["size"], color=MUTED)
+
+    # Already titled and labelled by charts.py, so these are placed as they
+    # are rather than run through compose_panel.
+    # Outside the season there is only one chart, and leaving it in the
+    # left-hand slot makes the slide look broken rather than sparse.
+    if len(charts) == 1:
+        positions = [(SLIDE_W_EMU / 914400 - FC_PANEL_W) / 2]
+    else:
+        positions = list(FC_PANEL_X)
+
+    for panel, left in zip(charts[:2], positions):
+        slide.shapes.add_picture(str(raw_dir / panel["image"]),
+                                 Inches(left), Inches(FC_CHART_Y),
+                                 Inches(FC_PANEL_W), Inches(FC_CHART_H))
+
+    if has_conditional:
+        caption = ("The conditional line is the only one here that settles "
+                   "as the season runs. It finds the past seasons that had "
+                   "about as much rain by this point as this one, and "
+                   "counts how many of them finished below the threshold. "
+                   "Early on almost every year qualifies and it sits near "
+                   "the base rate; late on only a few do, and it sharpens.")
+    else:
+        # Saying why a series is missing is worth more than leaving a
+        # reader to wonder whether it was forgotten.
+        caption = ("A third line, conditional on the rain already fallen, "
+                   "appears once the season is under way. Observed rainfall "
+                   "runs about three weeks behind, so it is absent until "
+                   "the record catches up with the season's start.")
+    add_text(slide, caption,
+             0.60, FC_CHART_Y + FC_CHART_H + 0.35, 10.49, 0.50,
+             size=8, color=MUTED)
     return True
 
 
@@ -341,10 +417,47 @@ MONTHS = ["January", "February", "March", "April", "May", "June", "July",
           "August", "September", "October", "November", "December"]
 
 
+def show_regions(out_dir):
+    """Print the governorates that --regions will accept.
+
+    Read out of observed.json rather than asked of Earth Engine, so it
+    is instant and needs no credentials. They are exactly the units
+    observed.py pulled rainfall for, which is exactly the set --regions
+    can draw.
+    """
+    path = out_dir / "observed.json"
+    if not path.exists():
+        raise SystemExit(f"No {path.name} yet, so there is nothing to "
+                         f"list. Run observed.py first.")
+
+    regions = json.loads(path.read_text()).get("regions") or {}
+    if not regions:
+        raise SystemExit(
+            "observed.json holds no admin units. Set regional_data: true "
+            "in config.yaml\nand run observed.py again."
+        )
+
+    rows = sorted((v.get("name", key), key) for key, v in regions.items())
+    width = max(len(name) for name, _ in rows)
+    print(f"{len(rows)} regions. Pass any of these to --regions, by name "
+          f"or by id:\n")
+    for name, uid in rows:
+        print(f"  {name:<{width}}   {uid}")
+    print(f'\n  python build_deck.py --regions "{rows[0][0]}"')
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--pdf", action="store_true",
                         help="also export a PDF (needs LibreOffice)")
+    parser.add_argument(
+        "--regions", nargs="+", metavar="ID", default=[],
+        help="admin units to chart, by name or by id. Given, the "
+             "season-to-date slide is replaced by one per unit. The "
+             "maps stay national.")
+    parser.add_argument(
+        "--list-regions", action="store_true",
+        help="print the units --regions accepts, then stop")
     args = parser.parse_args()
 
     base_dir = Path(__file__).parent
@@ -352,6 +465,10 @@ def main():
         config = yaml.safe_load(f)
 
     out_dir = base_dir / config["output"]["dir"]
+    if args.list_regions:
+        show_regions(out_dir)
+        return
+
     manifest_path = out_dir / "manifest.json"
     if not manifest_path.exists():
         raise SystemExit(f"No manifest at {manifest_path}. Run fetch.py first.")
@@ -363,7 +480,22 @@ def main():
 
     # Written by forecast.py when forecast files are configured. Absent is
     # normal and just means no forecast slide.
+    # The maps are national whatever happens. Only the two charts
+    # change with --regions, and forecast.py is what draws them, so it
+    # runs again here every time rather than the deck trying to work out
+    # whether what is on disk still answers the question. Costs a few
+    # seconds and means the flag, and its absence, always do what they
+    # say.
     forecast_path = out_dir / "forecast.json"
+    if forecast_path.exists():
+        import forecast as forecast_step
+        wanted = list(args.regions)
+        print(f"Charts for {len(wanted)} region"
+              f"{'' if len(wanted) == 1 else 's'} ..." if wanted
+              else "Charts for the whole country ...")
+        forecast_step.main((["--regions"] + wanted) if wanted else [])
+        print()
+
     forecast = (json.loads(forecast_path.read_text())
                 if forecast_path.exists() else None)
 
@@ -393,6 +525,12 @@ def main():
     contents = []
     if forecast:
         contents.append(forecast.get("heading", "Seasonal Forecast"))
+        groups = forecast.get("regional_charts") or []
+        if groups:
+            contents += [f"{g['label']}: season to date" for g in groups]
+        elif forecast.get("chart_panels"):
+            contents.append(f"{forecast.get('heading', 'Seasonal Forecast')}"
+                            f": season to date")
     elif (config.get("forecasts") or {}).get("images"):
         contents.append("Forecasts")
     contents += [s["label"] for s in manifest["slides"]]
@@ -404,6 +542,20 @@ def main():
         computed_forecast_slide(prs, forecast, running_head, page,
                                 raw_dir, panel_dir)
         page += 1
+        groups = forecast.get("regional_charts") or []
+        if groups:
+            # One slide per unit, in the order asked for, each laid out
+            # exactly like the national one so they can be read the same
+            # way and compared with each other.
+            for group in groups:
+                if forecast_chart_slide(
+                        prs, forecast, running_head, page, raw_dir,
+                        charts=group.get("panels"),
+                        label=group.get("label"),
+                        has_conditional=group.get("has_conditional")):
+                    page += 1
+        elif forecast_chart_slide(prs, forecast, running_head, page, raw_dir):
+            page += 1
     elif screenshot_forecast_slide(prs, config, running_head, page, base_dir):
         page += 1
 
@@ -423,10 +575,32 @@ def main():
         if not soffice:
             print("LibreOffice not found, skipping the PDF.")
             return
-        subprocess.run([soffice, "--headless", "--convert-to", "pdf",
-                        "--outdir", str(out_dir), str(pptx_path)],
-                       check=True, capture_output=True)
-        print(f"Wrote {pptx_path.with_suffix('.pdf')}")
+        # The deck is already written and saved by this point, so a failed
+        # conversion costs the PDF and nothing else. Crashing here would
+        # throw away a good run over an optional extra.
+        try:
+            subprocess.run([soffice, "--headless", "--convert-to", "pdf",
+                            "--outdir", str(out_dir), str(pptx_path)],
+                           check=True, capture_output=True, timeout=300)
+            print(f"Wrote {pptx_path.with_suffix('.pdf')}")
+        except subprocess.TimeoutExpired:
+            print("LibreOffice took too long, so no PDF. The deck is fine.")
+        except subprocess.CalledProcessError as error:
+            print(f"LibreOffice failed, so no PDF. The deck is fine.")
+            if error.returncode == -9:
+                # Killed outright rather than exiting with an error. On
+                # macOS that is Gatekeeper stopping an app that has not
+                # been opened once by hand since it was installed.
+                print("  It was killed rather than erroring, which on macOS "
+                      "usually means\n  the app has not been approved yet. "
+                      "Either open LibreOffice once\n  from Applications, or "
+                      "run:\n"
+                      "    xattr -dr com.apple.quarantine "
+                      "/Applications/LibreOffice.app")
+            else:
+                message = (error.stderr or b"").decode(errors="replace").strip()
+                if message:
+                    print(f"  {message.splitlines()[0]}")
 
 
 if __name__ == "__main__":
