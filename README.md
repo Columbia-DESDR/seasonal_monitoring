@@ -1,216 +1,318 @@
-# Yemen bulletin generator
+# Seasonal monitoring bulletin
 
-Builds the seasonal monitoring bulletin as a PowerPoint deck, in the same
-shape as the version previously assembled by hand: a title page, one slide
-per variable with a 2x2 grid of maps, and a sources and method page.
+Builds a monthly seasonal monitoring bulletin as a PowerPoint deck:
+title page, one slide per variable with a 2x2 grid of maps, a drought
+forecast slide, a season-to-date slide, and a sources and method page.
 
-Two steps, deliberately separate:
+Configured for Yemen. Pointing it at another country means editing
+`config.yaml` and nothing else.
 
-```
-fetch.py       Earth Engine  ->  maps + manifest.json in output/
-build_deck.py  manifest.json ->  .pptx (and .pdf with --pdf)
-```
+## Download the latest bulletin
 
-Keeping them apart means you can redo the slides as often as you like
-without re-hitting Earth Engine, which is the slow part.
+If you only want the deck, you do not need any of this. It builds itself
+monthly.
 
-## Just want the bulletin?
+1. **Actions** tab, then **Monthly bulletin**
+2. Open the most recent run, or press **Run workflow**
+3. On the run's Summary page, scroll to **Artifacts**
+4. Download and unzip. The .pptx and .pdf are both in there
 
-Then skip all of this. It builds itself every month and you can download
-the result, with nothing installed and nothing to sign into.
+## Requirements
 
-1. Actions tab in this repo
-2. **Monthly bulletin** in the left sidebar
-3. Open the most recent run, or press **Run workflow** for a fresh one,
-   which takes about four minutes
-4. On the run's Summary page, scroll to the bottom to **Artifacts**
-5. Download, unzip, and the .pptx and .pdf are both in there
+- Python 3.11 or newer
+- A Google account with Earth Engine enabled, and an Earth Engine
+  project. Free for non-commercial use. All the data this reads is
+  public.
+- LibreOffice, only if you want PDFs
 
-The rest of this README is for changing how the bulletin is built.
-
-## Setup
+## Install
 
 ```bash
 python3 -m venv venv
 source venv/bin/activate          # Windows: venv\Scripts\activate
 pip install -r requirements.txt
-
-cp .env.example .env              # then fill in EE_PROJECT
+cp .env.example .env
 ```
 
-## Try the deck half first
+Run `source venv/bin/activate` in every new terminal. Without it,
+`python` is not the one with these packages.
 
-Earth Engine authentication is the fiddly part, so you can skip it to start:
+To check the deck layout before setting up Earth Engine:
 
 ```bash
 python make_placeholders.py       # fake maps, no Earth Engine
 python build_deck.py
 ```
 
-That proves the layout works before you fight with auth.
+## Earth Engine access
 
-## Then the real thing
+### Your own account
 
-Two ways to reach Earth Engine. Pick one.
-
-### With the service account (recommended)
-
-Nothing to sign into. The key file is the credential, so there is no browser
-step and no gcloud involved. This is also what the scheduled run uses, so
-testing this way tests what actually runs.
-
-Put three lines in `.env`:
-
-```
-EE_PROJECT=desdr-510913
-EE_SERVICE_ACCOUNT_EMAIL=seasonal-monitoring@desdr-510913.iam.gserviceaccount.com
-EE_SERVICE_ACCOUNT_KEY=/absolute/path/to/your-key.json
-```
-
-`EE_SERVICE_ACCOUNT_KEY` is a **path to the .json file**, not the email. Get
-the key from the Keys tab of the service account in the Cloud console, and
-keep it outside the repo. Both lines are needed: with only one set, the code
-ignores the service account and signs in as you instead, which works on your
-laptop and nowhere else.
-
-### As yourself
+This is the normal route. Use it unless you are setting up the
+scheduled run.
 
 ```bash
-python -c "import ee; ee.Authenticate()"
+python -c "import ee; ee.Authenticate(auth_mode='notebook')"
 ```
 
-Only for this route, and only once. Leave the two service account lines
-blank or it will be used instead.
+Once per machine, not per run. Then put your Earth Engine project in
+`.env`:
 
-This shells out to gcloud, so it inherits gcloud's problems. If you see
-`ModuleNotFoundError: No module named 'imp'`, your gcloud is older than your
-Python: `imp` was removed in Python 3.12 and older gcloud releases still
-import it. Either point gcloud at an older interpreter, with
-`export CLOUDSDK_PYTHON=/usr/bin/python3` in your shell profile, or update
-the Cloud SDK. Or sidestep gcloud altogether with
-`ee.Authenticate(auth_mode='notebook')`, which does the browser flow
-directly. None of this applies on the service account route.
+```
+EE_PROJECT=your-ee-project-id
+```
 
-### Running it
+Leave `EE_SERVICE_ACCOUNT_EMAIL` and `EE_SERVICE_ACCOUNT_KEY` blank.
+Any organisation project works, and so does a personal one, because
+every dataset here is public.
+
+`auth_mode='notebook'` opens a browser directly. The default mode calls
+gcloud instead and inherits its problems, which the troubleshooting
+table below covers.
+
+### Service account
+
+For the scheduled run, and for anyone who already has access to the
+cloud project. It needs no browser and is not tied to a person, so the
+monthly build keeps working when people move on.
+
+```
+EE_PROJECT=your-project-id
+EE_SERVICE_ACCOUNT_EMAIL=name@your-project-id.iam.gserviceaccount.com
+EE_SERVICE_ACCOUNT_KEY=/absolute/path/to/key.json
+```
+
+`EE_SERVICE_ACCOUNT_KEY` is a path to the .json file, not the email.
+Both account lines are needed: with only one set, the service account
+is ignored and you are signed in as yourself instead.
+
+**Do not share the key.** A service account key is a credential that
+works for anyone holding it, with no second factor and no audit trail
+back to a person. Testers and collaborators use their own Google
+account. The key belongs in the repository secret and on the machine of
+whoever administers the cloud project, nowhere else.
+
+## Run
 
 ```bash
-rm -rf output                     # clear the placeholders
-python fetch.py
-python build_deck.py --pdf
+python fetch.py        # monitoring maps
+python observed.py     # rainfall record, for the drought threshold
+python build_deck.py   # computes the forecast, then assembles the deck
 ```
 
-The first line of output says which credential was used. Worth a glance:
-`service account` or `personal login`.
+Add `--pdf` to the last one for a PDF as well.
 
-## What each slide holds
+The first line of output names the credential in use, `service account`
+or `personal login`.
 
-Every variable gets one slide, laid out as a 2x2 grid:
+`fetch.py` and `observed.py` are the slow steps and are separate so the
+deck can be rebuilt without going back to Earth Engine. `observed.py`
+only needs re-running when the season moves on. `build_deck.py` runs
+`forecast.py` itself.
 
-|  | 1-month | 3-month |
-|---|---|---|
-| **top row** | standardized anomaly | standardized anomaly |
-| **bottom row** | % departure from normal | % departure from normal |
+### Regional charts
 
-Vegetation swaps the bottom row for VCI, which is what the existing
-bulletin does. That choice is the `second_row` key in the config.
+The two charts cover the whole country by default. Per governorate
+instead:
 
-Windows are trailing, so the 3-month figure covers the reported month and
-the two before it.
+```bash
+python build_deck.py --list-regions
+python build_deck.py --regions "Ta'izz Governorate" "Al Hudaydah Governorate"
+```
 
-## Changing what gets built
+Names or ids both work; quote names, which contain spaces and
+apostrophes. Each region gets its own slide, laid out like the national
+one. The maps stay national, since one governorate alone is too small
+to read as a map.
 
-Everything lives in `config.yaml`: which country, which month, and the three
-variables with their datasets, baseline years, palettes and bottom row.
+Dropping the flag returns the national charts. Nothing is cached
+between runs. `observed.py` pulls every governorate in one go, so it
+only runs once whatever combination you later ask for.
 
-Pointing this at another country should mean editing that file and nothing
-else. That is the main thing worth testing once Yemen works.
+## Output
+
+Everything lands in `output/`.
+
+| path | contents |
+|---|---|
+| `*_bulletin_YYYY_MM.pptx` | the deck |
+| `*_bulletin_YYYY_MM.pdf` | with `--pdf` |
+| `raw/` | map and chart images, before titling |
+| `panels/` | titled panels as placed on slides |
+| `manifest.json` | what `fetch.py` found and chose |
+| `observed.json` | rainfall curves, national and per region |
+| `forecast.json` | forecast numbers and panel list |
 
 ## Which month it reports on
 
-Not configured. `fetch.py` asks Earth Engine what each dataset actually
-holds, and reports on the most recent month that **all** of them fully
-cover. Every slide has to describe the same month, so the dataset that lags
-most decides, and that is normally CHIRPS, which runs about four weeks
-behind.
+Not configured. `fetch.py` asks Earth Engine what each dataset holds and
+reports the most recent month all of them fully cover, since every slide
+has to describe the same month. A month counts only when data reaches
+its last day, so data through 29 September still means an August
+bulletin.
 
-A month only counts as covered when the data reaches its last day. Data
-through 29 September still means an August bulletin, because September is
-incomplete.
+Set `bulletin.year` and `bulletin.month` in the config to rebuild an
+older one. Leave blank otherwise.
 
-It prints what it chose and why:
+## What the slides hold
 
-```
-Checking data availability ...
-  Rainfall: data through 2026-08-31
-  Soil Moisture: data through 2026-09-29
-  Vegetation: data through 2026-09-06
+Each variable gets a 2x2 grid:
 
-Reporting month: August 2026
-  limited by Rainfall, which has data through 2026-08-31
-```
+|  | 1-month | 3-month |
+|---|---|---|
+| **top** | standardized anomaly | standardized anomaly |
+| **bottom** | % departure from normal | % departure from normal |
 
-To rebuild an older bulletin, set both `bulletin.year` and `bulletin.month`
-in the config. That overrides the automatic choice. Leave them blank for
-normal runs.
+Vegetation swaps the bottom row for VCI, set by `second_row` in the
+config. Windows are trailing, so the 3-month figure covers the reported
+month and the two before it.
 
-The "data through" line on each slide is the newest data in that dataset,
-not the end of the window shown. The hand-made bulletin was ambiguous about
-which it meant, so this is worth confirming before anyone reads too much
-into it.
+The forecast slide holds the drought probability map and a % departure
+map. The season-to-date slide holds two charts:
 
-## The scheduled run
+**Forecast and rainfall so far.** The predicted season total, one
+standard deviation either side, the drought threshold, and this
+season's rain accumulating against it.
 
-`.github/workflows/bulletin.yml` runs the whole thing on the 10th of each
-month, plus a button for running it on demand. The 10th because CHIRPS lags
-about four weeks, so by then the previous month is reliably complete.
-`fetch.py` works out the reporting month itself, so that date only has to be
-late enough.
+**Trigger probabilities.** Three distributions of the same quantity.
+*Climatological* is the base rate and lands in one bin by construction;
+if it does not, something upstream is wrong. *Forecast* is the map on
+the previous slide. *Conditional* finds past seasons that had about as
+much rain by this point and counts how many finished below the
+threshold, with no model in it. The conditional series is the only one
+that settles as the season runs.
 
-What a run does: installs the dependencies and LibreOffice, writes the
-service account key to a temp file, then `fetch.py` and `build_deck.py --pdf`.
-The deck and the PDF are uploaded as artifacts and kept for 90 days.
+## How the forecast is computed
 
-It signs in with the service account, so it is not tied to anyone's Google
-account and keeps working whoever is around. The key lives in the repo's
-**Settings, Secrets and variables, Actions** as `EE_SERVICE_ACCOUNT_KEY_JSON`,
-holding the whole .json file as text. GitHub encrypts it and it cannot be
-read back out, only replaced. The project id and the account email are in
-the workflow file in plain text, which is fine: neither is a secret.
+The question is the chance the season comes in dry enough to count as a
+drought.
 
-To change the schedule, edit the `cron` line. To stop it running
-automatically while keeping the button, delete the `schedule` block.
+1. **Threshold**: the 20th percentile of observed seasonal rainfall per
+   pixel, so drought means dry for that place rather than below a fixed
+   number of millimetres.
+2. **Z-score**: `(threshold - forecast mean) / sqrt(prediction error
+   variance)`.
+3. **Normal CDF** of that z-score.
 
-A failed run emails whoever triggered it. Worth checking the Actions tab
-around the 11th if nobody has seen a bulletin.
+The variance is not optional. A single predicted number can only be
+above or below the threshold; a distribution can be asked how much of
+itself falls below it. Because the threshold is the 20th percentile,
+0.20 is the no-information baseline and higher means elevated risk.
+
+**The threshold must come from observations, not the hindcast.** The
+prediction error variance measures the model against observed rainfall,
+so the threshold has to come from the same distribution. A hindcast
+holds the model's own retrospective predictions, which regress toward
+the mean, so its spread is too narrow and every probability comes out
+too high.
+
+**Resolution.** The forecast is a 1 degree grid, rainfall is 0.05
+degrees. Averaging rainfall down to 1 degree would smooth away most of
+the variation the threshold exists to capture and leave the country
+with a few dozen cells. The coarse forecast is carried up onto the
+rainfall grid instead, named as `analysis_grid` in the config. One
+consequence is that the calibration check then compares a 1 degree
+quantity against a 0.05 degree one, which is not like for like; the run
+reports the number and says so rather than treating it as a fault.
+
+**Calibration check.** Every run places a forecast carrying no
+information at the climatological mean and asks for the probability,
+which should come back as the base rate. When the grids match and the
+gap exceeds 0.05, the run warns and marks the slide provisional.
+
+**Input files.** The forecast is PyCPT output, two GeoTIFFs in
+`forecasts/` named in the config. Clear those paths to skip the forecast
+slides. PyCPT coordinates are pixel centres, and a converter that treats
+them as the raster's outer edge shifts the whole grid half a cell, about
+50 km for Yemen. `forecast.py` detects that and corrects it on read,
+says so, and leaves the file on disk alone.
+
+## Configuration
+
+Everything is in `config.yaml`. The keys worth knowing:
+
+| key | what it does |
+|---|---|
+| `region` | country name and boundary collection |
+| `layers` | the variables, their datasets and baseline years |
+| `analysis_grid` | the area and resolution everything is computed on |
+| `season_start_day`, `season_length_days` | which days of the year the season covers |
+| `forecast_mu`, `forecast_var` | the PyCPT files |
+| `mean_scale`, `variance_scale` | unit corrections on those files |
+| `threshold_percentile` | what counts as a drought, 20 by default |
+| `analog_window_mm` | how close a past year must be to count as an analog |
+| `bounds_z` | width of the chart's band, in standard deviations |
+| `min_threshold_mm` | blank pixels whose threshold is under this |
+| `regional_data` | pull per-governorate data, for `--regions` |
+
+On `min_threshold_mm`: where a place gets almost no rain, the percentile
+lands on zero, nothing can fall below zero, and the driest cells in the
+country read as carrying no drought risk. A cutoff blanks them instead.
+It is 0 by default to match the reference dashboard; raise it if those
+cells mislead readers.
+
+## Scheduled run
+
+`.github/workflows/bulletin.yml` runs monthly on the 10th, plus a button
+for running on demand. The 10th because rainfall data lags about four
+weeks.
+
+It signs in with the service account, so it does not depend on anyone's
+personal account. Set these in the repository settings:
+
+| where | name | value |
+|---|---|---|
+| Secrets | `EE_SERVICE_ACCOUNT_KEY_JSON` | the whole key file as text |
+| Variables | `EE_PROJECT` | the cloud project id |
+| Variables | `EE_SERVICE_ACCOUNT_EMAIL` | the service account address |
+
+Only the first is a secret. GitHub encrypts it and it cannot be read
+back, only replaced.
+
+The run installs dependencies and LibreOffice, writes the key to a temp
+file, then runs the pipeline and uploads the deck and PDF as artifacts,
+kept 90 days. It skips `observed.py` when no forecast files are
+committed, so the bulletin still builds without a forecast slide.
+
+Edit the `cron` line to change the schedule. Delete the `schedule` block
+to keep the button but stop it running on its own. A failed run emails
+whoever triggered it.
+
+## Troubleshooting
+
+| symptom | cause and fix |
+|---|---|
+| `pyenv: python: command not found` | the venv is not active. `source venv/bin/activate` |
+| `ModuleNotFoundError: No module named 'ee'` | same |
+| `ModuleNotFoundError: No module named 'imp'` | gcloud is older than Python 3.12. Use `auth_mode='notebook'`, or `export CLOUDSDK_PYTHON=/usr/bin/python3`, or update the Cloud SDK |
+| `FileNotFoundError` naming an email address | `EE_SERVICE_ACCOUNT_KEY` and `EE_SERVICE_ACCOUNT_EMAIL` are swapped in `.env` |
+| Forecast slides missing, no error | the files named in the config are not on disk. A `.tiff` will not match a `.tif` |
+| `carries no usable data: every cell holds the same value` | the GeoTIFF conversion failed and wrote an integer raster, so NaN became that type's maximum. Reconvert from the NetCDF |
+| `Too many concurrent aggregations` | Earth Engine is busy. The code waits and retries; if it still fails, run again later |
+| `historical_curves keyed by ... rather than by year` | stale `observed.json`. Re-run `observed.py` |
+| LibreOffice killed on macOS | Gatekeeper quarantine. `xattr -dr com.apple.quarantine /Applications/LibreOffice.app` |
+| Deck identical after changing inputs | a previous `forecast.json` was reused. The run says when it clears one |
 
 ## Files
 
-| File | What it does |
+| file | what it does |
 |---|---|
-| `config.yaml` | Region, month, variables, boilerplate text. The only file you should normally edit. |
-| `fetch.py` | Talks to Earth Engine, computes anomalies, saves the maps. |
-| `build_deck.py` | Adds titles and colour bars, then assembles the deck. |
-| `bands.py` | Titles and value ranges for each kind of panel. |
-| `make_placeholders.py` | Fake data for working on layout offline. |
-
-## How this relates to the GEE scripts
-
-The `yemen_*_monitoring` scripts in `users/maxmauerman/wfp_yemen` each compute
-a standardized anomaly and export rendered images to the Drive folder
-`yemen_bulletin_exports`. `fetch.py` does the same calculation through the
-Python API and pulls the rendered map directly over HTTP, so Drive is not
-involved.
-
-There are six of those scripts because the calculation is repeated per
-variable and per window length. Here it is one function, with the dataset,
-baseline years and window length as arguments.
-
-In the existing deck the panel titles and colour bars are baked into the
-picture rather than being slide text. `build_deck.py` draws them the same
-way, with matplotlib, so the panels drop into the same slots.
+| `config.yaml` | all settings. The only file you normally edit |
+| `fetch.py` | pulls the rainfall, soil moisture and vegetation maps |
+| `observed.py` | pulls the rainfall record and per-region curves |
+| `forecast.py` | computes the drought probability and the charts |
+| `build_deck.py` | titles the panels and assembles the deck |
+| `charts.py` | draws the two charts |
+| `bands.py` | titles and value ranges per panel type |
+| `make_placeholders.py` | fake data for working on layout offline |
 
 ## Security
 
-`.env`, any `*.json` credentials and the `output/` folder are gitignored.
-Never commit a service account key. If one is ever pushed, rotate it rather
-than deleting the file, because git keeps history.
+`.env`, any `*.json` credentials and `output/` are gitignored. The
+blanket `*.json` rule is deliberate: a service account key is named
+after the project and a random hash, so no narrower pattern catches it
+reliably.
+
+Never commit a service account key, and never send one over chat or
+email. If one is pushed, rotate it rather than deleting the file, since
+git keeps history.
