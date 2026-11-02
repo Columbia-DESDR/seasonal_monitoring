@@ -486,15 +486,15 @@ def main():
     # whether what is on disk still answers the question. Costs a few
     # seconds and means the flag, and its absence, always do what they
     # say.
+   
     forecast_path = out_dir / "forecast.json"
-    if forecast_path.exists():
-        import forecast as forecast_step
-        wanted = list(args.regions)
-        print(f"Charts for {len(wanted)} region"
-              f"{'' if len(wanted) == 1 else 's'} ..." if wanted
-              else "Charts for the whole country ...")
-        forecast_step.main((["--regions"] + wanted) if wanted else [])
-        print()
+    import forecast as forecast_step
+    wanted = list(args.regions)
+    print(f"Charts for {len(wanted)} region"
+          f"{'' if len(wanted) == 1 else 's'} ..." if wanted
+          else "Charts for the whole country ...")
+    forecast_step.main((["--regions"] + wanted) if wanted else [])
+    print()
 
     forecast = (json.loads(forecast_path.read_text())
                 if forecast_path.exists() else None)
