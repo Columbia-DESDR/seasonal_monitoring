@@ -94,21 +94,41 @@ whoever administers the cloud project, nowhere else.
 
 ## Run
 
+Four steps, in this order:
+
 ```bash
-python fetch.py        # monitoring maps
-python observed.py     # rainfall record, for the drought threshold
-python build_deck.py   # computes the forecast, then assembles the deck
+python fetch.py
+python observed.py
+python forecast.py
+python build_deck.py
 ```
+
+| step | what it does | needs Earth Engine |
+|---|---|---|
+| `fetch.py` | pulls the rainfall, soil moisture and vegetation maps | yes |
+| `observed.py` | pulls the rainfall record the drought threshold comes from | yes |
+| `forecast.py` | computes the drought probability, the forecast maps and the two charts | no |
+| `build_deck.py` | assembles everything into the .pptx | no |
 
 Add `--pdf` to the last one for a PDF as well.
 
-The first line of output names the credential in use, `service account`
-or `personal login`.
+Without `forecast.py` there are no forecast slides. `build_deck.py` also
+runs it for you, so the last two can be one command, but it is listed
+here because it is a real step and the one people miss. Run it on its
+own when you only want the forecast images and numbers without
+rebuilding the deck.
 
-`fetch.py` and `observed.py` are the slow steps and are separate so the
-deck can be rebuilt without going back to Earth Engine. `observed.py`
-only needs re-running when the season moves on. `build_deck.py` runs
-`forecast.py` itself.
+`forecast.py` reads two things from disk: the PyCPT files named in
+`config.yaml` under `forecast_mu` and `forecast_var`, and the rainfall
+record `observed.py` wrote. If either is missing it says which and
+stops, and the deck is built without forecast slides.
+
+The first line of output from `fetch.py` and `observed.py` names the
+credential in use, `service account` or `personal login`.
+
+`fetch.py` and `observed.py` are the slow steps. They are separate so
+the deck can be rebuilt without going back to Earth Engine, and
+`observed.py` only needs re-running when the season moves on.
 
 ### Regional charts
 
@@ -123,7 +143,7 @@ python build_deck.py --regions "Ta'izz Governorate" "Al Hudaydah Governorate"
 Names or ids both work; quote names, which contain spaces and
 apostrophes. Each region gets its own slide, laid out like the national
 one. The maps stay national, since one governorate alone is too small
-to read as a map.
+to read as a map, with the selected governorates outlined in black.
 
 Dropping the flag returns the national charts. Nothing is cached
 between runs. `observed.py` pulls every governorate in one go, so it
@@ -286,7 +306,7 @@ whoever triggered it.
 | `ModuleNotFoundError: No module named 'ee'` | same |
 | `ModuleNotFoundError: No module named 'imp'` | gcloud is older than Python 3.12. Use `auth_mode='notebook'`, or `export CLOUDSDK_PYTHON=/usr/bin/python3`, or update the Cloud SDK |
 | `FileNotFoundError` naming an email address | `EE_SERVICE_ACCOUNT_KEY` and `EE_SERVICE_ACCOUNT_EMAIL` are swapped in `.env` |
-| Forecast slides missing, no error | the files named in the config are not on disk. A `.tiff` will not match a `.tif` |
+| Forecast slides missing, no error | `forecast.py` did not run, or the files named in the config are not on disk. Its output says which. `.tif` and `.tiff` are both accepted |
 | `carries no usable data: every cell holds the same value` | the GeoTIFF conversion failed and wrote an integer raster, so NaN became that type's maximum. Reconvert from the NetCDF |
 | `Too many concurrent aggregations` | Earth Engine is busy. The code waits and retries; if it still fails, run again later |
 | `historical_curves keyed by ... rather than by year` | stale `observed.json`. Re-run `observed.py` |
