@@ -50,9 +50,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import rasterio
-import yaml
+from matplotlib import patheffects
 from matplotlib.colors import LinearSegmentedColormap
 from scipy import ndimage
+
+import yaml
 from scipy.stats import norm
 
 from charts import (CLIM, CONDTL, FCAST_PROB,
@@ -344,7 +346,119 @@ def upsample(array, factor):
     return np.ma.array(fine, mask=fine_mask)
 
 
-def render(array, path, palette, vmin, vmax, smooth=True):
+def resolve_raster(path):
+    """The file named, or its twin under the other TIFF spelling.
+
+    .tif and .tiff are the same format, and which one you get depends on
+    whoever wrote the file. A config naming one while the disk holds the
+    other used to skip the forecast without erroring, so the deck came
+    out missing its forecast slides with nothing to say why.
+    """
+    if path.exists():
+        return path
+    twin = path.with_suffix(".tiff" if path.suffix == ".tif" else ".tif")
+    return twin if twin.exists() else path
+
+
+def resolve_units(stored, wanted):
+    """Turn what someone typed into admin unit ids.
+
+    Names or ids both, because nobody should have to paste a 23-digit
+    number to get a chart. Raises with the list when nothing matches,
+    since a silent miss here means a deck quietly missing a region.
+    """
+    by_name = {str(v.get("name", "")).casefold(): key
+               for key, v in stored.items()}
+    found = []
+    for ask in wanted:
+        uid = ask if ask in stored else by_name.get(str(ask).casefold())
+        if uid is None:
+            known = "\n  ".join(sorted(v.get("name", k)
+                                       for k, v in stored.items()))
+            raise SystemExit(
+                f"No admin unit matches '{ask}'.\n\nThe ones there are:"
+                f"\n  {known}\n\n"
+                f"build_deck.py --list-regions prints these with their ids."
+            )
+        found.append(uid)
+    return found
+
+
+def outline_rings(geojson, ids):
+    """Every boundary ring of the named units, as lon/lat arrays.
+
+    A unit is one Polygon or several, and each of those is an outer ring
+    plus any holes. All of them are drawn: a hole is a border too, and
+    Socotra being a separate polygon from the mainland is the normal
+    case rather than an awkward one.
+    """
+    wanted, rings = set(ids), []
+    for feature in (geojson or {}).get("features", []):
+        if (feature.get("properties") or {}).get("id") not in wanted:
+            continue
+        geometry = feature.get("geometry") or {}
+        polygons = ([geometry.get("coordinates")]
+                    if geometry.get("type") == "Polygon"
+                    else geometry.get("coordinates") or [])
+        for polygon in polygons:
+            for ring in polygon or []:
+                if len(ring) > 2:
+                    rings.append(np.asarray(ring, dtype=float))
+    return rings
+
+
+def ring_area_and_centre(ring):
+    """Signed-area maths for one closed ring: its size, and its centroid.
+
+    The centroid rather than the middle of the bounding box, because a
+    crescent-shaped governorate has a bounding box whose middle can sit
+    outside it altogether.
+    """
+    x, y = ring[:, 0], ring[:, 1]
+    cross = x[:-1] * y[1:] - x[1:] * y[:-1]
+    area = cross.sum() / 2.0
+    if abs(area) < 1e-12:
+        return 0.0, (float(x.mean()), float(y.mean()))
+    cx = ((x[:-1] + x[1:]) * cross).sum() / (6.0 * area)
+    cy = ((y[:-1] + y[1:]) * cross).sum() / (6.0 * area)
+    return abs(area), (float(cx), float(cy))
+
+
+def outline_labels(geojson, ids, names):
+    """Where to write each selected unit's name on the map.
+
+    One label per unit, placed at the centre of its largest piece, so a
+    governorate with offshore islands is named once on the mainland
+    rather than once per island. "Governorate" is dropped from the text:
+    on a map of governorates it says nothing, and the names are long
+    enough to collide without it.
+    """
+    wanted, labels = set(ids), []
+    for feature in (geojson or {}).get("features", []):
+        uid = (feature.get("properties") or {}).get("id")
+        if uid not in wanted:
+            continue
+        geometry = feature.get("geometry") or {}
+        polygons = ([geometry.get("coordinates")]
+                    if geometry.get("type") == "Polygon"
+                    else geometry.get("coordinates") or [])
+        best = None
+        for polygon in polygons:
+            if not polygon or len(polygon[0]) < 4:
+                continue
+            area, centre = ring_area_and_centre(
+                np.asarray(polygon[0], dtype=float))
+            if best is None or area > best[0]:
+                best = (area, centre)
+        if best is None:
+            continue
+        text = str(names.get(uid, uid)).replace(" Governorate", "").strip()
+        labels.append((best[1][0], best[1][1], text))
+    return labels
+
+
+def render(array, path, palette, vmin, vmax, smooth=True, bounds=None,
+           outlines=None, labels=None):
     """Save a bare map image, the same shape of thing Earth Engine returns.
 
     No title and no colour bar: build_deck.py draws those, so that the
@@ -375,9 +489,35 @@ def render(array, path, palette, vmin, vmax, smooth=True):
     longest = max(rows, cols)
     fig = plt.figure(figsize=(8 * cols / longest, 8 * rows / longest),
                      dpi=220)
+    # With bounds the axes are in degrees, so the borders can be drawn
+    # in the coordinates they come in. aspect="auto" keeps the image
+    # filling the figure exactly as it did before, since the figure is
+    # already sized to the grid.
+    extent = None
+    if bounds is not None:
+        left, bottom, right, top = bounds
+        extent = (left, right, bottom, top)
+
     ax = fig.add_axes([0, 0, 1, 1])
-    ax.imshow(array, cmap=cmap, vmin=vmin, vmax=vmax,
+    ax.imshow(array, cmap=cmap, vmin=vmin, vmax=vmax, extent=extent,
+              aspect="auto",
               interpolation="bilinear" if smooth else "nearest")
+
+    for ring in outlines or []:
+        ax.plot(ring[:, 0], ring[:, 1], color="#000000", linewidth=1.3,
+                solid_joinstyle="round", solid_capstyle="round")
+    # Black text with a white edge, so the name reads against both the
+    # navy and the red end of the colour ramp. Only when the axes are in
+    # degrees, since the positions are longitudes and latitudes.
+    if extent is not None:
+        for x, y, text in labels or []:
+            ax.text(x, y, text, ha="center", va="center", fontsize=11,
+                    fontweight="bold", color="#000000",
+                    path_effects=[patheffects.withStroke(
+                        linewidth=2.5, foreground="#ffffff")])
+        ax.set_xlim(extent[0], extent[1])
+        ax.set_ylim(extent[2], extent[3])
+
     ax.set_axis_off()
     fig.savefig(path, dpi=220, transparent=True)
     plt.close(fig)
@@ -582,20 +722,14 @@ def build_regional_charts(base_dir, obs, spec, raw_dir, reference,
         )
 
     by_id = {str(name): i for i, name in enumerate(mask_ids)}
-    # Accept an id or a name, so nobody has to paste a 23-digit number.
-    by_name = {str(v.get("name", "")).casefold(): k
-               for k, v in stored.items()}
 
     groups = []
-    for ask in wanted:
-        uid = ask if ask in stored else by_name.get(str(ask).casefold())
-        if uid is None or uid not in by_id:
-            known = "\n  ".join(sorted(v.get("name", k)
-                                       for k, v in stored.items()))
+    for uid in resolve_units(stored, wanted):
+        if uid not in by_id:
             raise SystemExit(
-                f"No admin unit matches '{ask}'.\n\nThe ones there are:"
-                f"\n  {known}\n\n"
-                f"build_deck.py --list-regions prints these with their ids."
+                f"{stored[uid].get('name', uid)} is in observed.json but "
+                f"not in {masks_path.name}.\nThey are written by the same "
+                f"run, so re-run observed.py to put them back in step."
             )
         outside = np.ma.getmaskarray(masks)[by_id[uid]]
         if (~outside).sum() == 0:
@@ -638,7 +772,8 @@ def main(argv=None):
         help="admin units to chart, by name or by id. Given, these "
              "replace the national charts rather than being added to "
              "them. build_deck.py --list-regions prints the options.")
-    regions_wanted = parser.parse_args(argv).regions
+    args = parser.parse_args(argv)
+    regions_wanted = args.regions
 
     base_dir = Path(__file__).parent
     with open(base_dir / "config.yaml") as f:
@@ -656,7 +791,7 @@ def main(argv=None):
     raw_dir.mkdir(parents=True, exist_ok=True)
     stale = out_dir / "forecast.json"
 
-    paths = {k: base_dir / spec[k] for k in needed}
+    paths = {k: resolve_raster(base_dir / spec[k]) for k in needed}
     missing = [str(p) for p in paths.values() if not p.exists()]
     if missing:
         print("Forecast files are configured but not on disk, skipping:")
@@ -930,10 +1065,33 @@ def main(argv=None):
         },
     ]
 
+    # Outline whichever regions were asked for, and only those. A map
+    # with all 22 governorates drawn on it is a different kind of map
+    # and nobody asked for that one.
+    obs = load_observed(base_dir, config)
+    outlines, outlined, labels = [], [], []
+    if regions_wanted:
+        stored = (obs or {}).get("regions") or {}
+        shapes = base_dir / spec.get("dir", "forecasts") / "regions.geojson"
+        if stored and shapes.exists():
+            outlined = resolve_units(stored, regions_wanted)
+            borders = json.loads(shapes.read_text())
+            outlines = outline_rings(borders, outlined)
+            labels = outline_labels(
+                borders, outlined,
+                {u: stored[u].get("name", u) for u in outlined})
+            names = ", ".join(stored[u].get("name", u) for u in outlined)
+            print(f"\nOutlining on the maps: {names}")
+        else:
+            print(f"\nNo region borders on disk, so the maps are drawn "
+                  f"without them.\n  Re-run observed.py, which writes "
+                  f"{shapes.name}.")
+
     smooth = spec.get("smooth_maps", True)
     for panel in panels:
         render(panel.pop("array"), raw_dir / panel["raw_image"],
-               panel["palette"], panel["min"], panel["max"], smooth=smooth)
+               panel["palette"], panel["min"], panel["max"], smooth=smooth,
+               bounds=grid_bounds, outlines=outlines, labels=labels)
 
     # The charts. Asked for admin units, those replace the national pair
     # rather than joining it: a deck about three governorates should not
@@ -954,7 +1112,6 @@ def main(argv=None):
         print(f"\nCleared {gone} chart{'' if gone == 1 else 's'} from the "
               f"previous run")
 
-    obs = load_observed(base_dir, config)
     chart_panels, regional = [], []
     if obs is not None:
         if regions_wanted:

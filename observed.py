@@ -33,12 +33,21 @@ Outputs:
       for Yemen that rectangle also holds Saudi Arabia, Oman, the Red Sea
       and part of the Horn of Africa.
 
+  forecasts/region_masks.tif
+      The same again per admin unit, one band each, so a chart can be
+      drawn for a single governorate.
+
+  forecasts/regions.geojson
+      The admin unit borders, simplified, for outlining a selected
+      region on the forecast maps.
+
   output/observed.json
       Cumulative rainfall averaged over the country, pentad by pentad:
       this season, and the same curve for every past season. The chart
       draws the first; the conditional probability is worked out from
       both, by finding past years that had about this much rain by this
-      point.
+      point. Also holds each admin unit's own curve and its rainfall by
+      this point in every past year.
 
     python observed.py
 
@@ -269,8 +278,8 @@ def admin_units(region_cfg):
     """The admin units inside the region, as an Earth Engine collection.
 
     The same boundaries the maps are clipped with, so a regional chart
-    and the national one are cut from one source. build_deck.py
-    --list-regions prints their names and ids.
+    and the national one are cut from one source. Their names and ids are
+    printed by build_deck.py --list-regions.
     """
     return (ee.FeatureCollection(region_cfg["boundary_collection"])
             .filter(ee.Filter.eq(region_cfg["filter_property"],
@@ -290,6 +299,24 @@ def region_mask_stack(units, ids, bounds, width, height, out_path):
              for i, uid in enumerate(ids)]
     download_geotiff(ee.Image.cat(bands), bounds, width, height, out_path)
     label_bands(out_path, ids)
+
+
+def region_outlines(units, out_path, tolerance_m=1000):
+    """The admin unit borders as GeoJSON, for drawing on the maps.
+
+    Simplified before download rather than after. The full polygons are
+    tens of megabytes of coastline detail, none of which a map this size
+    can show: at 0.05 degree cells, a kilometre is a fifth of a pixel.
+    What is wanted is a line a reader can see, not a faithful coastline.
+
+    Vector rather than tracing the mask raster, because a mask traced at
+    0.05 degrees comes out as a visible staircase once it is drawn onto
+    an eight inch figure.
+    """
+    simple = units.map(lambda f: ee.Feature(
+        f.geometry().simplify(tolerance_m),
+        {"id": f.get("shapeID"), "name": f.get("shapeName")}))
+    out_path.write_text(json.dumps(with_retries(simple.getInfo)))
 
 
 def reduce_over_units(stack, units, scale):
@@ -525,6 +552,11 @@ def main():
                           masks_path)
         print(f"  wrote {masks_path}  (one band per unit)")
 
+        shapes_path = out_dir / "regions.geojson"
+        region_outlines(units, shapes_path)
+        print(f"  wrote {shapes_path}  "
+              f"({shapes_path.stat().st_size / 1024:.0f} KB of borders)")
+
         # Where in the season the past years get compared. Same rule as
         # the national chart, including the dashboard's one pentad step
         # back, so a regional answer and the national one are built the
@@ -586,7 +618,7 @@ def main():
         "days_elapsed": elapsed,
         "in_season": bool(current),
         # Per admin unit, for build_deck.py --regions. Keyed by the same
-        # id build_deck.py --list-regions prints.
+        # id that build_deck.py --list-regions prints.
         "regions": regions,
         "analog_index": analog_index,
         "analog_cut": analog_cut.isoformat() if analog_cut else None,

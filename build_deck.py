@@ -14,18 +14,17 @@ Reads output/manifest.json. No Earth Engine here.
 """
 
 import argparse
+import yaml
 import json
 import re
 import shutil
 import subprocess
-import sys
 from datetime import date
 from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import yaml
 from matplotlib.colorbar import ColorbarBase
 from matplotlib.colors import LinearSegmentedColormap, Normalize
 from pptx import Presentation
@@ -486,7 +485,13 @@ def main():
     # whether what is on disk still answers the question. Costs a few
     # seconds and means the flag, and its absence, always do what they
     # say.
-   
+    # Unconditionally, not only when a forecast.json is already sitting
+    # there. Gating on that file was wrong both ways round: the first
+    # run after it had been cleared never recreated it, so the deck came
+    # out with no forecast slides and nothing in the log to say why, and
+    # a run that did have one could not notice its inputs had changed.
+    # forecast.py says so and returns harmlessly when no forecast files
+    # are configured, so there is nothing to guard against.
     forecast_path = out_dir / "forecast.json"
     import forecast as forecast_step
     wanted = list(args.regions)
