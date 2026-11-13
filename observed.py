@@ -55,6 +55,7 @@ Needs Earth Engine, same credentials as fetch.py.
 """
 
 import json
+import math
 import time
 from datetime import date, timedelta
 from pathlib import Path
@@ -76,6 +77,53 @@ CHIRPS = "UCSB-CHC/CHIRPS/V3/PENTAD"
 CHIRPS_CURRENT = "projects/climate-engine-pro/assets/ce-chirps-prelim-pentad"
 
 
+def grid_from_bounds(west, south, east, north, cell):
+    """The smallest grid of whole rainfall cells that covers a box.
+
+    Each edge is pushed outward to the next multiple of the cell size,
+    so nothing of the country is cut off and the grid lands exactly on
+    the rainfall product's own pixels. That last part matters: CHIRPS
+    cells sit on multiples of 0.05 degrees, so a grid snapped this way
+    reads each rainfall pixel as it is, with no resampling in between.
+
+    Worked through for a box from 42.53 to 54.48 east at 0.05 degrees:
+    42.53 moves out to 42.50, 54.48 moves out to 54.50, and the width is
+    (54.50 - 42.50) / 0.05 = 240 cells.
+
+    The tiny tolerance is for edges already on a multiple, which
+    floating point would otherwise push a whole cell further out.
+    """
+    tol = 1e-9
+    left = math.floor(west / cell + tol) * cell
+    right = math.ceil(east / cell - tol) * cell
+    bottom = math.floor(south / cell + tol) * cell
+    top = math.ceil(north / cell - tol) * cell
+    return {
+        "bounds": [round(left, 6), round(bottom, 6),
+                   round(right, 6), round(top, 6)],
+        "width": int(round((right - left) / cell)),
+        "height": int(round((top - bottom) / cell)),
+    }
+
+
+def computed_grid(region):
+    """Work the analysis grid out, so nobody has to type it.
+
+    Two facts are needed and both are already to hand: the country's
+    bounding box, from the same boundaries everything is clipped with,
+    and the size of a rainfall cell, from the rainfall product itself.
+    """
+    ring = region.bounds().coordinates().get(0).getInfo()
+    lons = [point[0] for point in ring]
+    lats = [point[1] for point in ring]
+
+    transform = (ee.ImageCollection(CHIRPS).first()
+                 .projection().getInfo().get("transform") or [])
+    cell = abs(transform[0]) if transform else 0.05
+    return grid_from_bounds(min(lons), min(lats), max(lons), max(lats),
+                            cell), cell
+
+
 def season_spec(spec):
     """Season start and length in days, the way the dashboard states it.
 
@@ -93,7 +141,7 @@ def season_spec(spec):
         raise SystemExit(
             "Set either forecasts.season_start_day and "
             "forecasts.season_length_days,\n"
-            "or forecasts.season_months, in config.yaml."
+            "or forecasts.season_months, in the config."
         )
     start_month, end_month = months
     start = date(2001, start_month, 1)
@@ -418,16 +466,20 @@ def main():
                                      region_cfg["filter_value"])))
     region = features.geometry()
 
-    # Everything is computed on this grid, which should be at rainfall
-    # resolution rather than the forecast's. See the note at the top.
-    grid = spec.get("analysis_grid") or spec.get("grid")
-    if not grid:
-        raise SystemExit(
-            "Set forecasts.analysis_grid in config.yaml to the area to "
-            "compute over,\nat rainfall resolution:\n"
-            "  analysis_grid: "
-            "{ bounds: [42.0, 11.9, 54.8, 19.1], width: 256, height: 144 }"
-        )
+    # Everything is computed on this grid, at rainfall resolution rather
+    # than the forecast's. See the note at the top. It is worked out from
+    # the country outline unless the config pins one, which is worth
+    # doing only to trim the box or to freeze it against a change in the
+    # boundary data.
+    grid = spec.get("analysis_grid")
+    if grid:
+        print(f"Analysis grid from the config: {grid['width']} x "
+              f"{grid['height']} cells over {grid['bounds']}")
+    else:
+        grid, cell = computed_grid(region)
+        print(f"Analysis grid worked out from the {region_cfg['name']} "
+              f"outline: {grid['width']} x {grid['height']} cells of "
+              f"{cell:g} degrees\n  over {grid['bounds']}")
     bounds = ee.Geometry.Rectangle(grid["bounds"], None, False)
 
     start_day, length = season_spec(spec)
@@ -617,6 +669,8 @@ def main():
         "historical_curves": {str(y): c for y, c in curves.items()},
         "days_elapsed": elapsed,
         "in_season": bool(current),
+        # The grid every raster here is on, whether typed or worked out.
+        "analysis_grid": grid,
         # Per admin unit, for build_deck.py --regions. Keyed by the same
         # id that build_deck.py --list-regions prints.
         "regions": regions,

@@ -138,10 +138,10 @@ forecasts:
   # dashboard does it the other way: rainfall stays where it is and the
   # forecast is carried up onto it, so the map keeps its detail. This is
   # that grid.
-  analysis_grid:
-    bounds: [42.0, 11.9, 54.8, 19.1]
-    width: 256
-    height: 144
+ # analysis_grid:
+   # bounds: [42.0, 11.9, 54.8, 19.1]
+   # width: 256
+   # height: 144
 
   # How far back to go. The dashboard starts at 1983.
   observed_start: 1983
