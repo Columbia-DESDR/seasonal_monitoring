@@ -384,6 +384,34 @@ def resolve_units(stored, wanted):
     return found
 
 
+def polygons_of(geometry):
+    """Every polygon inside a GeoJSON geometry, whatever its type.
+
+    Three shapes turn up. A Polygon is one. A MultiPolygon is several.
+    A GeometryCollection is a mixed bag, and it is what Earth Engine
+    hands back when simplifying a coastline collapses some small island
+    into a line or a point: the unit then arrives as polygons plus
+    leftovers, with no "coordinates" at the top level at all. Reading
+    only the first two types meant such a unit drew no border and no
+    name, without any error. Al Hudaydah, with its Red Sea islands, is
+    one of those.
+
+    Lines and points inside a collection are skipped, since they have
+    no area to outline.
+    """
+    kind = (geometry or {}).get("type")
+    if kind == "Polygon":
+        return [geometry.get("coordinates") or []]
+    if kind == "MultiPolygon":
+        return list(geometry.get("coordinates") or [])
+    if kind == "GeometryCollection":
+        found = []
+        for member in geometry.get("geometries") or []:
+            found.extend(polygons_of(member))
+        return found
+    return []
+
+
 def outline_rings(geojson, ids):
     """Every boundary ring of the named units, as lon/lat arrays.
 
@@ -397,9 +425,7 @@ def outline_rings(geojson, ids):
         if (feature.get("properties") or {}).get("id") not in wanted:
             continue
         geometry = feature.get("geometry") or {}
-        polygons = ([geometry.get("coordinates")]
-                    if geometry.get("type") == "Polygon"
-                    else geometry.get("coordinates") or [])
+        polygons = polygons_of(geometry)
         for polygon in polygons:
             for ring in polygon or []:
                 if len(ring) > 2:
@@ -439,9 +465,7 @@ def outline_labels(geojson, ids, names):
         if uid not in wanted:
             continue
         geometry = feature.get("geometry") or {}
-        polygons = ([geometry.get("coordinates")]
-                    if geometry.get("type") == "Polygon"
-                    else geometry.get("coordinates") or [])
+        polygons = polygons_of(geometry)
         best = None
         for polygon in polygons:
             if not polygon or len(polygon[0]) < 4:
@@ -1082,6 +1106,13 @@ def main(argv=None):
                 {u: stored[u].get("name", u) for u in outlined})
             names = ", ".join(stored[u].get("name", u) for u in outlined)
             print(f"\nOutlining on the maps: {names}")
+            drawn = {x[2] for x in labels}
+            for u in outlined:
+                short = str(stored[u].get("name", u)).replace(
+                    " Governorate", "").strip()
+                if short not in drawn:
+                    print(f"  no border found for {stored[u].get('name', u)}"
+                          f" in {shapes.name}, so it is not outlined")
         else:
             print(f"\nNo region borders on disk, so the maps are drawn "
                   f"without them.\n  Re-run observed.py, which writes "
