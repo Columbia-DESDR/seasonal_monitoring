@@ -54,6 +54,7 @@ Outputs:
 Needs Earth Engine, same credentials as fetch.py.
 """
 
+import argparse
 import json
 import math
 import time
@@ -65,7 +66,8 @@ import rasterio
 import requests
 import yaml
 
-from fetch import initialize, load_config, utc_date
+from fetch import initialize, utc_date
+from settings import config_argument, load_config
 
 
 # The dashboard's climatology and threshold come from this one.
@@ -119,7 +121,10 @@ def computed_grid(region):
 
     transform = (ee.ImageCollection(CHIRPS).first()
                  .projection().getInfo().get("transform") or [])
-    cell = abs(transform[0]) if transform else 0.05
+    # Rounded, because the product stores its cell size as a 32-bit
+    # number, 0.0500000007..., and using that as it stands puts the
+    # edges at values like 41.800001 instead of 41.8.
+    cell = round(abs(transform[0]), 6) if transform else 0.05
     return grid_from_bounds(min(lons), min(lats), max(lons), max(lats),
                             cell), cell
 
@@ -454,10 +459,14 @@ def latest_date(collection):
     return date.fromisoformat(utc_date(span["max"]))
 
 
-def main():
+def main(argv=None):
+    args = config_argument(argparse.ArgumentParser(
+        description="Pull the observed rainfall record from Earth Engine."
+    )).parse_args(argv)
+
     initialize()
     base_dir = Path(__file__).parent
-    config = load_config()
+    config = load_config(args.config)
 
     spec = config.get("forecasts") or {}
     region_cfg = config["region"]
@@ -528,7 +537,7 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     mask_path = out_dir / "region_mask.tif"
-    print(f"\nBuilding a {region_cfg['name']} mask on the "
+    print(f"\nBuilding the {region_cfg['name']} mask on the "
           f"{grid['width']}x{grid['height']} grid ...")
     download_geotiff(ee.Image.constant(1).toFloat().clip(region),
                      bounds, grid["width"], grid["height"], mask_path)
@@ -683,10 +692,17 @@ def main():
     (out / "observed.json").write_text(json.dumps(record, indent=2))
     print(f"  wrote {out / 'observed.json'}")
 
+    # Only speak up if the config is not already pointing at what was
+    # just written. When it is, there is nothing for anyone to do.
     folder = spec.get("dir", "forecasts")
-    print("\nSet these in config.yaml so forecast.py picks them up:")
-    print(f"  region_mask:        {folder}/region_mask.tif")
-    print(f"  observed_rainfall:  {folder}/observed_seasonal.tif")
+    wanted = {"region_mask": f"{folder}/region_mask.tif",
+              "observed_rainfall": f"{folder}/observed_seasonal.tif"}
+    unset = {k: v for k, v in wanted.items() if spec.get(k) != v}
+    if unset:
+        print(f"\nSet these in {args.config} so forecast.py picks them up:")
+        for key, value in unset.items():
+            print(f"  {key}: {value}")
+    print(f"\nNext: python build_deck.py --config {args.config}")
 
 
 if __name__ == "__main__":

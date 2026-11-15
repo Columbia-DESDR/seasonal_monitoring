@@ -10,6 +10,7 @@ Writes raw maps plus manifest.json into output/. build_deck.py reads that
 manifest, so you can redo the slides without re-running this.
 """
 
+import argparse
 import calendar
 import json
 import os
@@ -22,6 +23,7 @@ import yaml
 from dotenv import load_dotenv
 
 from bands import BAND_SPECS, rows_for, panel_title
+from settings import config_argument, load_config
 
 
 def initialize():
@@ -69,11 +71,6 @@ def initialize():
 
     ee.Initialize(project=project)
     print(f"Earth Engine ready (personal login, project {project})")
-
-
-def load_config(path="config.yaml"):
-    with open(path) as f:
-        return yaml.safe_load(f)
 
 
 def get_collection(spec, band):
@@ -226,9 +223,13 @@ def download_png(image, vis, region, width, out_path):
     out_path.write_bytes(response.content)
 
 
-def main():
+def main(argv=None):
+    args = config_argument(argparse.ArgumentParser(
+        description="Pull the monitoring maps from Earth Engine."
+    )).parse_args(argv)
+
     initialize()
-    config = load_config()
+    config = load_config(args.config)
 
     region_cfg = config["region"]
     features = (ee.FeatureCollection(region_cfg["boundary_collection"])

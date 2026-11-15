@@ -14,6 +14,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
+    # One job per country, run side by side. Each name here is a file
+    # in configs/, so adding a country is that file plus one word on
+    # this line. fail-fast is off so that one country failing does not
+    # cancel the others halfway through.
+    strategy:
+      fail-fast: false
+      matrix:
+        country: [yemen, ethiopia]
+
     env:
       # Repository variables, not secrets. Set them under Settings,
       # Secrets and variables, Actions, Variables tab. Neither is
@@ -78,7 +87,7 @@ jobs:
           echo "EE_SERVICE_ACCOUNT_KEY=$KEY_PATH" >> "$GITHUB_ENV"
 
       - name: Fetch the monitoring maps
-        run: python fetch.py
+        run: python fetch.py --config configs/${{ matrix.country }}.yaml
 
       - name: Pull the rainfall record
         # Needed before the forecast: the drought threshold is a
@@ -86,22 +95,23 @@ jobs:
         # Skipped when no forecast files are committed, since there is
         # then nothing to compare against.
         run: |
-          if ls forecasts/forecast_mu_*.tif >/dev/null 2>&1; then
-            python observed.py
+          if ls forecasts/${{ matrix.country }}/forecast_mu_*.tif* >/dev/null 2>&1; then
+            python observed.py --config configs/${{ matrix.country }}.yaml
           else
-            echo "No forecast files in forecasts/, so no forecast slide."
+            echo "No forecast files for ${{ matrix.country }}, so no forecast slide."
           fi
 
       - name: Build the deck
         # Runs forecast.py itself, so there is no separate step for it.
-        run: python build_deck.py --pdf
+        run: python build_deck.py --pdf --config configs/${{ matrix.country }}.yaml
 
       - name: Upload the bulletin
         uses: actions/upload-artifact@v4
         with:
-          name: bulletin
+          # Named per country, or the second job would overwrite the first.
+          name: bulletin-${{ matrix.country }}
           path: |
-            output/*.pptx
-            output/*.pdf
+            output/${{ matrix.country }}/*.pptx
+            output/${{ matrix.country }}/*.pdf
           if-no-files-found: error
           retention-days: 90

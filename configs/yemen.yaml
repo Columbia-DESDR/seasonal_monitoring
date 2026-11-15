@@ -1,0 +1,238 @@
+# Settings for one country. One file per country in this folder; the
+# code is shared. Run with:  python build_deck.py --config configs/yemen.yaml
+
+region:
+  name: Yemen         
+  boundary_collection: "WM/geoLab/geoBoundaries/600/ADM1"
+  filter_property: shapeGroup
+  filter_value: YEM      
+
+bulletin:
+  title: "Yemen Seasonal Monitoring"    
+
+# Each variable becomes one slide: a 2x2 grid of
+# [top row]    the standardized anomaly at 1-month and 3-month
+# [bottom row] a second view at 1-month and 3-month
+layers:
+  - key: rainfall
+    label: Rainfall
+    source_label: "CHIRPS"
+    source_detail: "CHIRPS (UCSB-CHG/CHIRPS/DAILY)"
+    collection: "UCSB-CHG/CHIRPS/DAILY"
+    band: precipitation
+    clim_start: 1981
+    clim_end: 2025
+    palette: ["B78200", "FFFFFF", "0027FF"]
+    second_row: anomaly_pct
+
+  - key: soil_moisture
+    label: Soil Moisture
+    source_label: "SMAP L3 Enhanced"
+    source_detail: "SMAP L3 Enhanced (NASA/SMAP/SPL3SMP_E/005, NASA/SMAP/SPL3SMP_E/006)"
+    # Two collections merged. 005 holds the historical record, 006 carries
+    # it on from 2024. Loading only 006 silently shrinks the baseline to a
+    # couple of years, which quietly corrupts every anomaly.
+    collection:
+      - "NASA/SMAP/SPL3SMP_E/005"
+      - "NASA/SMAP/SPL3SMP_E/006"
+    band: soil_moisture_am
+    clim_start: 2016
+    clim_end: 2025
+    palette: ["B78200", "FFFFFF", "0027FF"]
+    second_row: anomaly_pct
+
+  - key: vegetation
+    label: Vegetation
+    source_label: "VIIRS NDVI"
+    source_detail: "VIIRS NDVI (NASA/VIIRS/002/VNP13A1)"
+    collection: "NASA/VIIRS/002/VNP13A1"
+    band: NDVI
+    clim_start: 2013
+    clim_end: 2025
+    palette: ["a36437", "FCD163", "207401"]
+    second_row: vci
+
+# Trailing window lengths, in days. 1-month and 3-month.
+windows:
+  - { key: "1month", label: "1-month", days: 30 }
+  - { key: "3month", label: "3-month", days: 90 }
+
+# Optional forecast slide, computed from PyCPT output by forecast.py.
+#
+# These are GeoTIFFs on disk rather than Earth Engine assets, because nothing
+# uploads PyCPT output to Earth Engine yet. Once that pipeline exists this
+# section points at an asset instead. Clear the three file paths to skip the
+# forecast slide entirely.
+#
+# The forecast and the observed rainfall must share one grid, since the
+# threshold is compared against the forecast pixel by pixel. observed.py
+# handles that: it asks Earth Engine for CHIRPS on exactly the grid named
+# below, so nothing has to be reprojected by hand afterwards.
+forecasts:
+  heading: "Seasonal Forecast"
+  season: "JJA 2026"
+  note: "PyCPT 2.10.2. Drought threshold is the 20th percentile of observed CHIRPS rainfall."
+  source_detail: "PyCPT 2.10.2 MME deterministic forecast and prediction error variance"
+  dir: forecasts/yemen
+  forecast_mu: forecasts/yemen/forecast_mu_2026.tif
+  forecast_var: forecasts/yemen/forecast_var_2026.tif
+
+  # Optional. Only used as the baseline for the departure map now that the
+  # threshold comes from observed rainfall. There is no Yemen hindcast, so
+  # this is blank and observed rainfall is used instead, which is the more
+  # meaningful comparison anyway.
+  hindcast_mu:
+
+  # Unit corrections on the PyCPT output, applied before anything uses
+  # it. Both default to 1, meaning the files are taken as they come.
+  #
+  # The Code Editor forecast script divides the mean by 3 and the variance
+  # by 9. That is one rescaling applied consistently, since scaling a
+  # quantity by 1/3 scales its variance by 1/9. Whether it is needed
+  # depends on how the NetCDF was written, so it is not assumed here.
+  #
+  # How to tell: run forecast.py and read the calibration line. A forecast
+  # carrying no information should return the base rate. If it reports a
+  # number well above that, the spread is too wide and variance_scale is
+  # the dial. 0.1111 is the divide-by-9 the Code Editor uses.
+  mean_scale: 0.3333
+  variance_scale: 0.1111
+
+  # What counts as a drought. The 20th percentile means the worst one year in
+  # five historically, which also makes 0.20 the probability you would expect
+  # from a forecast carrying no information. A policy choice, not a
+  # statistical one: lower covers rarer, more severe events.
+  threshold_percentile: 20
+
+  # ---- observed rainfall, all written by observed.py ----
+  #
+  # The season, stated the way the Code Editor dashboard states it: a
+  # start day of the year and a run of days. Day 152 is 1 June. Pentads
+  # are stamped at their first day, so a 90-day run quietly takes in the
+  # pentad that straddles the end, and the season covers 1 June to
+  # 31 August.
+  season_start_day: 152
+  season_length_days: 90
+  season_months: [6, 8]          # only a fallback now; kept for reference
+
+  # Where everything is actually computed: the country, at rainfall
+  # resolution, which is finer than the forecast.
+  #
+  # Worked out by observed.py, so there is nothing to type: it takes the
+  # country's bounding box from the boundaries above and pushes each
+  # edge out to the next whole rainfall cell. The run prints what it
+  # chose, and observed.json records it.
+  #
+  # Set it by hand only to trim the box, for example to leave out a
+  # distant island, or to freeze it so a change in the boundary data
+  # cannot shift the rasters. Edges should be multiples of the rainfall
+  # cell size, 0.05 degrees.
+  # analysis_grid:
+  #   bounds: [42.0, 11.9, 54.8, 19.1]
+  #   width: 256
+  #   height: 144
+
+  # How far back to go. The dashboard starts at 1983.
+  observed_start: 1983
+  observed_end: 2025
+
+  # The country on the forecast grid, written by observed.py. PyCPT
+  # output is a plain rectangle: for Yemen it also covers Saudi Arabia,
+  # Oman, the Red Sea and part of the Horn of Africa. Without this the
+  # maps draw rainfall over countries the bulletin is not about, and the
+  # histogram counts their pixels.
+  region_mask: forecasts/yemen/region_mask.tif
+
+  # Where the threshold is taken from. This should be OBSERVED seasonal
+  # rainfall, one band per year, on the same grid as the forecast, because
+  # PyCPT's prediction error variance is measured against observations.
+  #
+  # Left blank, forecast.py falls back to the hindcast and the probabilities
+  # come out too high: the hindcast holds the model's own predictions, and
+  # predictions regress toward the mean, so their spread is narrower than
+  # real rainfall and the percentile is not extreme enough. forecast.py
+  # measures the error on every run and marks the slide when it is large.
+  observed_rainfall: forecasts/yemen/observed_seasonal.tif
+
+  # How the conditional probability is worked out. Past seasons that had
+  # within this many millimetres of what has fallen so far, measured on
+  # the country average at the same point in the season, count as ways
+  # this season could still go. The dashboard uses 5 mm. Too tight and
+  # no year qualifies; too loose and it collapses back to the base rate.
+  analog_window_mm: 5
+
+  # The dashboard compares this season's running total against each past
+  # year's total one pentad earlier, an off-by-one in how it works out
+  # the cut off date. Kept at 1 so the two agree. Set to 0 to compare
+  # like with like, which raises the conditional probability a little.
+  analog_offset_pentads: 1
+
+  # Count the histogram in 1 km pixels, as the dashboard does, rather
+  # than in cells of this grid. Same distribution either way; this just
+  # puts the two charts on the same axis instead of one reading thirty
+  # times shorter.
+  histogram_as_km2: true
+
+  # Pull what the regional charts need for every admin unit, so
+  # build_deck.py --regions can ask for any of them without observed.py
+  # having to run again. Costs a few minutes on top of the national
+  # pull. Set false if you will only ever want the whole country.
+  regional_data: true
+
+  # How wide the forecast band on the chart is, in standard deviations.
+  # The dashboard draws one, which is "about this much either way"
+  # rather than a 95% interval.
+  bounds_z: 1.0
+
+  # Pixels whose drought threshold comes out below this are left blank.
+  # Somewhere that gets no rain cannot have a rainfall deficit: the
+  # percentile lands on zero, nothing can fall below it, and the map would
+  # otherwise show the driest cells in the country as carrying no drought
+  # risk. The test is the threshold rather than the average, because a
+  # pixel can average a decent amount on the back of a few wet years and
+  # still sit at zero in most of them. Matters most somewhere desert.
+  #
+  # Set to 0 to match the dashboard, which does not do this. On the fine
+  # grid it matters less than it did: at 1 degree a cell averaged a whole
+  # province together, so a dry one dragged a wide area to zero.
+  min_threshold_mm: 0
+
+  # The PyCPT grid is coarse, 1 degree for Yemen, against CHIRPS at 0.05 on
+  # the other slides, so drawn one square per cell it looks blocky beside
+  # them.
+  # Interpolating matches how the Code Editor displays the same data. Set
+  # false to see the model's real resolution.
+  smooth_maps: true
+
+  # The palette from the Code Editor forecast script, so the map reads the
+  # same way as the dashboard version: navy, green, yellow, orange, red.
+  probability_palette: ["001137", "0aab1e", "e7eb05", "ff4a2d", "e90000"]
+  departure_palette: ["B78200", "FFFFFF", "0027FF"]
+
+  # Fallback: static screenshots from the maproom, used only when the files
+  # above are absent. This is what the hand-made bulletin did.
+  images: []
+  #   - { file: april.png, caption: "Issued April Lead Time" }
+
+method_text: >-
+  Standardized values are z-scores: the period mean minus the long-term mean
+  for the same period, divided by the year-to-year standard deviation of that
+  period mean. They are not gamma-fitted SPI, so standard SPI drought category
+  thresholds do not apply. Percentage values are departure from normal, where
+  0 means normal. VCI is a 0-100 position between the best and worst on record
+  for each pixel. Windows are trailing: a 3-month figure covers the reported
+  month and the two preceding it. Values are standardized against the full
+  climatological record, the conventional approach.
+
+disclaimer_text: >-
+  Content is based on the most recent remote sensing data available at the time
+  of publication. Conditions are dynamic and may not fully reflect the situation
+  on the ground. Standardized values are z-scores relative to the stated
+  climatological period, not gamma-fitted SPI, so standard SPI drought category
+  thresholds do not apply.
+
+output:
+  # Its own folder, so one country's run never overwrites another's.
+  dir: output/yemen
+  # Pixel width of the rendered map pulled from Earth Engine.
+  map_width_px: 900

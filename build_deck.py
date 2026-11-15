@@ -14,7 +14,6 @@ Reads output/manifest.json. No Earth Engine here.
 """
 
 import argparse
-import yaml
 import json
 import re
 import shutil
@@ -31,6 +30,7 @@ from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
 from pptx.util import Emu, Inches, Pt
+from settings import config_argument, load_config
 
 
 # ----------------------------------------------------------------------
@@ -416,7 +416,7 @@ MONTHS = ["January", "February", "March", "April", "May", "June", "July",
           "August", "September", "October", "November", "December"]
 
 
-def show_regions(out_dir):
+def show_regions(out_dir, config_path):
     """Print the governorates that --regions will accept.
 
     Read out of observed.json rather than asked of Earth Engine, so it
@@ -442,7 +442,9 @@ def show_regions(out_dir):
           f"or by id:\n")
     for name, uid in rows:
         print(f"  {name:<{width}}   {uid}")
-    print(f'\n  python build_deck.py --regions "{rows[0][0]}"')
+    print(f'\n  python build_deck.py --config {config_path} '
+          f'--regions "{rows[0][0]}"')
+    print(f'  python build_deck.py --config {config_path} --regions all')
 
 
 def main():
@@ -451,21 +453,22 @@ def main():
                         help="also export a PDF (needs LibreOffice)")
     parser.add_argument(
         "--regions", nargs="+", metavar="ID", default=[],
-        help="admin units to chart, by name or by id. Given, the "
+        help="admin units to chart, by name or by id, or the word "
+             "'all' for every one. Given, the "
              "season-to-date slide is replaced by one per unit. The "
              "maps stay national.")
     parser.add_argument(
         "--list-regions", action="store_true",
         help="print the units --regions accepts, then stop")
+    config_argument(parser)
     args = parser.parse_args()
 
     base_dir = Path(__file__).parent
-    with open(base_dir / "config.yaml") as f:
-        config = yaml.safe_load(f)
+    config = load_config(args.config)
 
     out_dir = base_dir / config["output"]["dir"]
     if args.list_regions:
-        show_regions(out_dir)
+        show_regions(out_dir, args.config)
         return
 
     manifest_path = out_dir / "manifest.json"
@@ -495,10 +498,14 @@ def main():
     forecast_path = out_dir / "forecast.json"
     import forecast as forecast_step
     wanted = list(args.regions)
-    print(f"Charts for {len(wanted)} region"
-          f"{'' if len(wanted) == 1 else 's'} ..." if wanted
-          else "Charts for the whole country ...")
-    forecast_step.main((["--regions"] + wanted) if wanted else [])
+    if [w.casefold() for w in wanted] == ["all"]:
+        print("Charts for every region ...")
+    else:
+        print(f"Charts for {len(wanted)} region"
+              f"{'' if len(wanted) == 1 else 's'} ..." if wanted
+              else "Charts for the whole country ...")
+    forecast_step.main((["--regions"] + wanted if wanted else [])
+                       + ["--config", args.config])
     print()
 
     forecast = (json.loads(forecast_path.read_text())

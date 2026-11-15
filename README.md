@@ -4,8 +4,10 @@ Builds a monthly seasonal monitoring bulletin as a PowerPoint deck:
 title page, one slide per variable with a 2x2 grid of maps, a drought
 forecast slide, a season-to-date slide, and a sources and method page.
 
-Configured for Yemen. Pointing it at another country means editing
-`config.yaml` and nothing else.
+One settings file per country in `configs/`, and one shared codebase.
+Yemen and Ethiopia are set up. Every command takes `--config` to say
+which country, and there is no default, so a run can never quietly
+build the wrong one.
 
 ## Download the latest bulletin
 
@@ -40,8 +42,8 @@ Run `source venv/bin/activate` in every new terminal. Without it,
 To check the deck layout before setting up Earth Engine:
 
 ```bash
-python make_placeholders.py       # fake maps, no Earth Engine
-python build_deck.py
+python make_placeholders.py --config configs/yemen.yaml   # fake maps
+python build_deck.py --config configs/yemen.yaml
 ```
 
 ## Earth Engine access
@@ -97,11 +99,15 @@ whoever administers the cloud project, nowhere else.
 Four steps, in this order:
 
 ```bash
-python fetch.py
-python observed.py
-python forecast.py
-python build_deck.py
+python fetch.py       --config configs/yemen.yaml
+python observed.py    --config configs/yemen.yaml
+python forecast.py    --config configs/yemen.yaml
+python build_deck.py  --config configs/yemen.yaml
 ```
+
+Swap `yemen` for `ethiopia` to build the other one. Each country reads
+and writes its own folders, `forecasts/<country>/` and
+`output/<country>/`, so they never overwrite each other.
 
 | step | what it does | needs Earth Engine |
 |---|---|---|
@@ -119,7 +125,7 @@ own when you only want the forecast images and numbers without
 rebuilding the deck.
 
 `forecast.py` reads two things from disk: the PyCPT files named in
-`config.yaml` under `forecast_mu` and `forecast_var`, and the rainfall
+the config under `forecast_mu` and `forecast_var`, and the rainfall
 record `observed.py` wrote. If either is missing it says which and
 stops, and the deck is built without forecast slides.
 
@@ -136,14 +142,15 @@ The two charts cover the whole country by default. Per governorate
 instead:
 
 ```bash
-python build_deck.py --list-regions
-python build_deck.py --regions "Ta'izz Governorate" "Al Hudaydah Governorate"
+python build_deck.py --config configs/yemen.yaml --list-regions
+python build_deck.py --config configs/yemen.yaml --regions "Ta'izz Governorate" "Al Hudaydah Governorate"
 ```
 
 Names or ids both work; quote names, which contain spaces and
 apostrophes. Each region gets its own slide, laid out like the national
 one. The maps stay national, since one governorate alone is too small
-to read as a map, with the selected governorates outlined in black.
+to read as a map, with the selected governorates outlined in black
+and named.
 
 Dropping the flag returns the national charts. Nothing is cached
 between runs. `observed.py` pulls every governorate in one go, so it
@@ -151,7 +158,7 @@ only runs once whatever combination you later ask for.
 
 ## Output
 
-Everything lands in `output/`.
+Everything lands in `output/<country>/`.
 
 | path | contents |
 |---|---|
@@ -230,7 +237,8 @@ too high.
 degrees. Averaging rainfall down to 1 degree would smooth away most of
 the variation the threshold exists to capture and leave the country
 with a few dozen cells. The coarse forecast is carried up onto the
-rainfall grid instead, named as `analysis_grid` in the config. One
+rainfall grid instead. `observed.py` works that grid out from the
+country outline, so there is nothing to type. One
 consequence is that the calibration check then compares a 1 degree
 quantity against a 0.05 degree one, which is not like for like; the run
 reports the number and says so rather than treating it as a fault.
@@ -249,15 +257,16 @@ says so, and leaves the file on disk alone.
 
 ## Configuration
 
-Everything is in `config.yaml`. The keys worth knowing:
+Everything is in the country's file in `configs/`. The keys worth knowing:
 
 | key | what it does |
 |---|---|
 | `region` | country name and boundary collection |
 | `layers` | the variables, their datasets and baseline years |
-| `analysis_grid` | the area and resolution everything is computed on |
+| `analysis_grid` | optional. The grid everything is computed on, worked out from the country outline when left unset |
 | `season_start_day`, `season_length_days` | which days of the year the season covers |
-| `forecast_mu`, `forecast_var` | the PyCPT files |
+| `forecast_mu`, `forecast_var` | the PyCPT files, `.tif` or `.tiff` |
+| `forecasts.dir`, `output.dir` | this country's own folders |
 | `mean_scale`, `variance_scale` | unit corrections on those files |
 | `threshold_percentile` | what counts as a drought, 20 by default |
 | `analog_window_mm` | how close a past year must be to count as an analog |
@@ -270,6 +279,26 @@ lands on zero, nothing can fall below zero, and the driest cells in the
 country read as carrying no drought risk. A cutoff blanks them instead.
 It is 0 by default to match the reference dashboard; raise it if those
 cells mislead readers.
+
+## Adding a country
+
+1. Copy an existing file: `cp configs/yemen.yaml configs/kenya.yaml`
+2. In the copy, change `region.name`, `region.filter_value` (the
+   three-letter country code), `bulletin.title`, the season, the
+   forecast file paths, and `forecasts.dir` and `output.dir` so they
+   end in the new country's name
+3. Check `mean_scale` and `variance_scale`. PyCPT output is a season
+   total for some domains and a monthly average for others, so these
+   are per country
+4. Put the two PyCPT files in `forecasts/<country>/`
+5. Add the name to the `country:` list in the workflow
+
+There are no grid numbers to work out. `observed.py` takes the country's
+bounding box from the boundary data and snaps it to whole rainfall
+cells, and prints what it chose.
+
+A region inside a country is not a new config. It is the `--regions`
+flag on that country's config.
 
 ## Scheduled run
 
@@ -288,6 +317,10 @@ personal account. Set these in the repository settings:
 
 Only the first is a secret. GitHub encrypts it and it cannot be read
 back, only replaced.
+
+It runs once per country listed under `matrix.country` in the workflow,
+side by side, and uploads one artifact each, `bulletin-yemen` and so
+on. One country failing does not stop the others.
 
 The run installs dependencies and LibreOffice, writes the key to a temp
 file, then runs the pipeline and uploads the deck and PDF as artifacts,
@@ -317,7 +350,8 @@ whoever triggered it.
 
 | file | what it does |
 |---|---|
-| `config.yaml` | all settings. The only file you normally edit |
+| `configs/<country>.yaml` | all settings for one country. The only files you normally edit |
+| `settings.py` | reads a config; shared by every script |
 | `fetch.py` | pulls the rainfall, soil moisture and vegetation maps |
 | `observed.py` | pulls the rainfall record and per-region curves |
 | `forecast.py` | computes the drought probability and the charts |

@@ -54,8 +54,9 @@ from matplotlib import patheffects
 from matplotlib.colors import LinearSegmentedColormap
 from scipy import ndimage
 
-import yaml
 from scipy.stats import norm
+
+from settings import config_argument, load_config
 
 from charts import (CLIM, CONDTL, FCAST_PROB,
                     probability_distributions, season_to_date)
@@ -367,6 +368,11 @@ def resolve_units(stored, wanted):
     number to get a chart. Raises with the list when nothing matches,
     since a silent miss here means a deck quietly missing a region.
     """
+    # The word "all" on its own means every unit, in name order, so
+    
+    if [str(w).casefold() for w in wanted] == ["all"]:
+        return sorted(stored, key=lambda key: str(stored[key].get("name", key)))
+
     by_name = {str(v.get("name", "")).casefold(): key
                for key, v in stored.items()}
     found = []
@@ -793,15 +799,16 @@ def main(argv=None):
         description="Turn a PyCPT forecast into drought maps and charts.")
     parser.add_argument(
         "--regions", nargs="+", metavar="ID", default=[],
-        help="admin units to chart, by name or by id. Given, these "
+        help="admin units to chart, by name or by id, or the word "
+             "'all' for every one. Given, these "
              "replace the national charts rather than being added to "
              "them. build_deck.py --list-regions prints the options.")
+    config_argument(parser)
     args = parser.parse_args(argv)
     regions_wanted = args.regions
 
     base_dir = Path(__file__).parent
-    with open(base_dir / "config.yaml") as f:
-        config = yaml.safe_load(f)
+    config = load_config(args.config)
 
     spec = config.get("forecasts") or {}
     needed = ("forecast_mu", "forecast_var")
@@ -1208,9 +1215,9 @@ def main(argv=None):
     if regional:
         print(f"  {plural(len(regional), 'region')}: "
               + ", ".join(g["label"] for g in regional))
-    print("Next: python build_deck.py"
-          + (f" --regions {' '.join(regions_wanted)}" if regions_wanted
-             else ""))
+    quoted = " ".join(f'"{name}"' for name in regions_wanted)
+    print(f"Next: python build_deck.py --config {args.config}"
+          + (f" --regions {quoted}" if regions_wanted else ""))
 
 
 if __name__ == "__main__":

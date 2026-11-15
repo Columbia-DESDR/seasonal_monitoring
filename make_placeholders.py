@@ -9,15 +9,16 @@ Nothing here touches Earth Engine. Clear the output folder and run fetch.py
 once you have real data.
 """
 
+import argparse
 import json
 import math
 from datetime import date
 from pathlib import Path
 
-import yaml
 from PIL import Image
 
 from bands import BAND_SPECS, rows_for, panel_title
+from settings import config_argument, load_config
 
 
 def hex_to_rgb(value):
@@ -42,10 +43,13 @@ def fake_map(palette, width=900, height=560):
     return image
 
 
-def main():
+def main(argv=None):
+    args = config_argument(argparse.ArgumentParser(
+        description="Write fake maps, for working on the deck offline."
+    )).parse_args(argv)
+
     base_dir = Path(__file__).parent
-    with open(base_dir / "config.yaml") as f:
-        config = yaml.safe_load(f)
+    config = load_config(args.config)
 
     out_dir = base_dir / config["output"]["dir"]
     raw_dir = out_dir / "raw"
@@ -54,15 +58,6 @@ def main():
     region = config["region"]
     bulletin = config["bulletin"]
     prefix = region["filter_value"].lower()
-
-    # The real run asks Earth Engine which month it can cover. With no
-    # Earth Engine here, fall back to last month.
-    year, month = bulletin.get("year"), bulletin.get("month")
-    if not (year and month):
-        today = date.today()
-        month, year = today.month - 1, today.year
-        if month < 1:
-            month, year = 12, year - 1
 
     slides = []
     count = 0
@@ -100,8 +95,8 @@ def main():
     manifest = {
         "region": region["name"],
         "title": bulletin["title"] + " (PLACEHOLDER DATA)",
-        "year": year,
-        "month": month,
+        "year": bulletin["year"],
+        "month": bulletin["month"],
         "generated": date.today().isoformat(),
         "slides": slides,
     }
