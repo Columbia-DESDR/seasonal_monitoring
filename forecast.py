@@ -1069,7 +1069,13 @@ def main(argv=None):
     dep_palette = spec.get("departure_palette",
                            ["B78200", "FFFFFF", "0027FF"])
 
+    # observed.py reads the season off the forecast when it can, so its
+    # label wins over the one typed in the config.
+    observed_path = out_dir / "observed.json"
     season = spec.get("season", "")
+    if observed_path.exists():
+        season = (json.loads(observed_path.read_text()).get("season_label")
+                  or season)
     panels = [
         {
             "key": "trigger_probability",

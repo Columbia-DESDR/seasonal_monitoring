@@ -112,7 +112,7 @@ and writes its own folders, `forecasts/<country>/` and
 | step | what it does | needs Earth Engine |
 |---|---|---|
 | `fetch.py` | pulls the rainfall, soil moisture and vegetation maps | yes |
-| `observed.py` | pulls the rainfall record the drought threshold comes from | yes |
+| `observed.py` | pulls the rainfall record the drought threshold comes from, and the forecast if it is in Earth Engine | yes |
 | `forecast.py` | computes the drought probability, the forecast maps and the two charts | no |
 | `build_deck.py` | assembles everything into the .pptx | no |
 
@@ -126,7 +126,29 @@ rebuilding the deck.
 
 `forecast.py` reads two things from disk: the PyCPT files named in
 the config under `forecast_mu` and `forecast_var`, and the rainfall
-record `observed.py` wrote. If either is missing it says which and
+record `observed.py` wrote. When the config sets `forecast_folder`,
+`observed.py` downloads the newest forecast from Earth Engine to those
+two paths, so nothing needs copying by hand.
+
+### Where the forecast comes from
+
+Forecasts are uploaded to Earth Engine under one naming rule:
+
+```
+<forecast_folder>/<COUNTRY>_pycpt_<SEASON>/issued_<YEAR>_<MONTH>
+e.g. projects/desdr-510913/assets/forecasts/YEM_pycpt_JAS/issued_2026_05
+```
+
+- `COUNTRY` is the code in the config's `filter_value` (`YEM`, `ETH`)
+- `SEASON` is the month initials (`JAS`, `OND`, `JJAS`)
+- each image has two bands named `mu` and `var`
+- set the start and end dates on upload when you can
+
+`observed.py` takes the newest image that has both bands. The season
+comes from the image's dates, or failing that from the names, and the
+config's season settings are only a fallback. If no forecast is found
+it says why, uses files already in `forecasts/<country>/` if there are
+any, and otherwise the bulletin is built without the forecast slides. If either is missing it says which and
 stops, and the deck is built without forecast slides.
 
 The first line of output from `fetch.py` and `observed.py` names the
@@ -265,7 +287,8 @@ Everything is in the country's file in `configs/`. The keys worth knowing:
 | `layers` | the variables, their datasets and baseline years |
 | `analysis_grid` | optional. The grid everything is computed on, worked out from the country outline when left unset |
 | `season_start_day`, `season_length_days` | which days of the year the season covers |
-| `forecast_mu`, `forecast_var` | the PyCPT files, `.tif` or `.tiff` |
+| `forecast_folder` | optional. Earth Engine folder holding the `<COUNTRY>_pycpt_<SEASON>` collections. Leave blank to use local files only |
+| `forecast_mu`, `forecast_var` | the PyCPT files, `.tif` or `.tiff`. Where the download lands when `forecast_folder` is set |
 | `forecasts.dir`, `output.dir` | this country's own folders |
 | `mean_scale`, `variance_scale` | unit corrections on those files |
 | `threshold_percentile` | what counts as a drought, 20 by default |
@@ -324,8 +347,8 @@ on. One country failing does not stop the others.
 
 The run installs dependencies and LibreOffice, writes the key to a temp
 file, then runs the pipeline and uploads the deck and PDF as artifacts,
-kept 90 days. It skips `observed.py` when no forecast files are
-committed, so the bulletin still builds without a forecast slide.
+kept 90 days. When a country has no forecast, `observed.py`
+says so and the bulletin still builds without the forecast slides.
 
 Edit the `cron` line to change the schedule. Delete the `schedule` block
 to keep the button but stop it running on its own. A failed run emails

@@ -74,6 +74,14 @@ forecasts:
   note: "PyCPT 2.10.2. Drought threshold is the 20th percentile of observed CHIRPS rainfall."
   source_detail: "PyCPT 2.10.2 MME deterministic forecast and prediction error variance"
   dir: forecasts/ethiopia
+  # Where the forecasts live in Earth Engine. observed.py looks in here
+  # for a collection named <COUNTRY>_pycpt_<SEASON> (YEM_pycpt_JAS), takes
+  # its newest image with bands named mu and var (issued_2026_05), and
+  # downloads it to the two paths below. The season comes from the
+  # forecast too, so the season settings further down are only a fallback.
+  # If nothing is found, files already at those paths are used, and with
+  # none there the bulletin goes out without the forecast slides.
+  forecast_folder: projects/desdr-510913/assets/forecasts
   forecast_mu: forecasts/ethiopia/forecast_mu_2026.tif
   forecast_var: forecasts/ethiopia/forecast_var_2026.tif
 

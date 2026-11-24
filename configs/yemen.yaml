@@ -70,10 +70,18 @@ windows:
 # below, so nothing has to be reprojected by hand afterwards.
 forecasts:
   heading: "Seasonal Forecast"
-  season: "JJA 2026"
+  season: "JAS 2026"
   note: "PyCPT 2.10.2. Drought threshold is the 20th percentile of observed CHIRPS rainfall."
   source_detail: "PyCPT 2.10.2 MME deterministic forecast and prediction error variance"
   dir: forecasts/yemen
+  # Where the forecasts live in Earth Engine. observed.py looks in here
+  # for a collection named <COUNTRY>_pycpt_<SEASON> (YEM_pycpt_JAS), takes
+  # its newest image with bands named mu and var (issued_2026_05), and
+  # downloads it to the two paths below. The season comes from the
+  # forecast too, so the season settings further down are only a fallback.
+  # If nothing is found, files already at those paths are used, and with
+  # none there the bulletin goes out without the forecast slides.
+  forecast_folder: projects/desdr-510913/assets/forecasts
   forecast_mu: forecasts/yemen/forecast_mu_2026.tif
   forecast_var: forecasts/yemen/forecast_var_2026.tif
 
@@ -107,13 +115,13 @@ forecasts:
   # ---- observed rainfall, all written by observed.py ----
   #
   # The season, stated the way the Code Editor dashboard states it: a
-  # start day of the year and a run of days. Day 152 is 1 June. Pentads
-  # are stamped at their first day, so a 90-day run quietly takes in the
-  # pentad that straddles the end, and the season covers 1 June to
-  # 31 August.
-  season_start_day: 152
+  # start day of the year and a run of days. Day 182 is 1 July. Pentads
+  # are stamped at their first day, so a 90-day run takes in all 18 pentads
+  # from 1 July to 30 September, leap years included. JAS, to match the
+  # season the forecast was issued for.
+  season_start_day: 182
   season_length_days: 90
-  season_months: [6, 8]          # only a fallback now; kept for reference
+  season_months: [7, 9]          # only a fallback now; kept for reference
 
   # Where everything is actually computed: the country, at rainfall
   # resolution, which is finer than the forecast.

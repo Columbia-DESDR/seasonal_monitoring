@@ -89,17 +89,12 @@ jobs:
       - name: Fetch the monitoring maps
         run: python fetch.py --config configs/${{ matrix.country }}.yaml
 
-      - name: Pull the rainfall record
-        # Needed before the forecast: the drought threshold is a
-        # percentile of observed rainfall, and this is what writes it.
-        # Skipped when no forecast files are committed, since there is
-        # then nothing to compare against.
-        run: |
-          if ls forecasts/${{ matrix.country }}/forecast_mu_*.tif* >/dev/null 2>&1; then
-            python observed.py --config configs/${{ matrix.country }}.yaml
-          else
-            echo "No forecast files for ${{ matrix.country }}, so no forecast slide."
-          fi
+      - name: Pull the forecast and the rainfall record
+        # Needed before the forecast slides: this downloads the forecast
+        # from Earth Engine and the observed rainfall the drought threshold
+        # comes from. When there is no forecast it says so and stops
+        # without failing, and the deck goes out without those slides.
+        run: python observed.py --config configs/${{ matrix.country }}.yaml
 
       - name: Build the deck
         # Runs forecast.py itself, so there is no separate step for it.

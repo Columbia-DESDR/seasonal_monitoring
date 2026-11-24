@@ -57,6 +57,7 @@ Needs Earth Engine, same credentials as fetch.py.
 import argparse
 import json
 import math
+import re
 import time
 from datetime import date, timedelta
 from pathlib import Path
@@ -219,6 +220,198 @@ def download_geotiff(image, region, width, height, out_path):
     response = requests.get(url, timeout=600)
     response.raise_for_status()
     out_path.write_bytes(response.content)
+
+
+FORECAST_BANDS = ("mu", "var")
+NODATA = -9999.0
+MONTH_LETTERS = "JFMAMJJASOND"
+
+# The naming the forecast uploads follow:
+#   <folder>/<COUNTRY>_pycpt_<SEASON>/issued_<YEAR>_<MONTH>
+# e.g. forecasts/YEM_pycpt_JAS/issued_2026_05. The country is the code the
+# config already filters the boundaries on, the season is month initials.
+COLLECTION_NAME = re.compile(r"^([A-Za-z]{3})_pycpt_([A-Za-z]+)$")
+IMAGE_NAME = re.compile(r"^issued_(\d{4})_(\d{1,2})$")
+
+# Written into every file this script downloads, so a later run can tell
+# its own old download (safe to delete) from a file someone copied in by
+# hand (left alone).
+DOWNLOAD_TAG = "downloaded_from"
+
+
+def season_from_letters(code):
+    """'JAS' -> (7, 3): starting month and number of months.
+
+    None when the letters are not consecutive month initials, or match
+    more than one run of months, since guessing would be worse than
+    falling back to the config.
+    """
+    code = code.upper()
+    if not 1 < len(code) <= 12:
+        return None
+    starts = [m for m in range(12)
+              if all(MONTH_LETTERS[(m + i) % 12] == c
+                     for i, c in enumerate(code))]
+    return (starts[0] + 1, len(code)) if len(starts) == 1 else None
+
+
+def asset_name(asset_id):
+    return asset_id.rstrip("/").split("/")[-1]
+
+
+def find_forecast(folder, country):
+    """The newest usable forecast for one country, or a reason there is none.
+
+    Looks in `folder` for collections named <COUNTRY>_pycpt_<SEASON>, and
+    in those for images with both a mu and a var band. Newest means latest
+    issue date from the image name, then latest season start, then latest
+    upload. Returns (forecast, None) or (None, reason).
+    """
+    try:
+        listing = ee.data.listAssets({"parent": folder})["assets"]
+    except Exception as error:
+        return None, (f"could not open {folder}. The account running this "
+                      f"may not have read access.\n  ({error})")
+
+    collections = []
+    for asset in listing:
+        match = COLLECTION_NAME.match(asset_name(asset["id"]))
+        if (asset["type"] == "IMAGE_COLLECTION" and match
+                and match.group(1).upper() == country.upper()):
+            collections.append((asset["id"], match.group(2).upper()))
+    if not collections:
+        return None, (f"no collection named {country.upper()}_pycpt_<SEASON> "
+                      f"in {folder}")
+
+    usable = []
+    for collection_id, season_code in collections:
+        images = ee.data.listAssets({"parent": collection_id})["assets"]
+        for listed in images:
+            if listed["type"] != "IMAGE":
+                continue
+            # The listing leaves out bands and dates, so each image is
+            # looked up in full. There are only a handful.
+            info = ee.data.getAsset(listed["id"])
+            name = asset_name(info["id"])
+            bands = [b["id"] for b in info.get("bands", [])]
+            missing = [b for b in FORECAST_BANDS if b not in bands]
+            if missing:
+                print(f"  skipping {name}: no {' or '.join(missing)} band "
+                      f"(has {bands or 'none'})")
+                continue
+            issued = IMAGE_NAME.match(name)
+            usable.append({
+                "id": info["id"],
+                "name": name,
+                "season_code": season_code,
+                "issued": ((int(issued.group(1)), int(issued.group(2)))
+                           if issued else None),
+                "start": info.get("startTime"),
+                "end": info.get("endTime"),
+                "updated": info.get("updateTime", ""),
+            })
+
+    if not usable:
+        names = ", ".join(asset_name(c) for c, _ in collections)
+        return None, f"no image in {names} has both a mu and a var band"
+
+    newest = max(usable, key=lambda f: (f["issued"] or (0, 0),
+                                        f["start"] or "", f["updated"]))
+    return newest, None
+
+
+def forecast_season(forecast):
+    """The season a forecast is for, as (start date, length in days, label).
+
+    Taken from the image's start and end dates when it has them, otherwise
+    from the collection name and the issue date in the image name. None
+    when neither says enough, and the config is used instead.
+    """
+    code = forecast["season_code"]
+    if forecast["start"] and forecast["end"]:
+        start = date.fromisoformat(forecast["start"][:10])
+        end = date.fromisoformat(forecast["end"][:10])
+        return start, (end - start).days, f"{code} {start.year}", "image dates"
+
+    months = season_from_letters(code)
+    if months and forecast["issued"]:
+        first_month, count = months
+        issue_year, issue_month = forecast["issued"]
+        # A forecast is issued before its season, so the season is the next
+        # time that month comes round: May 2026 for JAS is JAS 2026, but
+        # September 2026 for JFM is JFM 2027.
+        year = issue_year if first_month >= issue_month else issue_year + 1
+        start = date(year, first_month, 1)
+        after = first_month - 1 + count
+        end = date(year + after // 12, after % 12 + 1, 1)
+        return start, (end - start).days, f"{code} {year}", "names"
+    return None
+
+
+def stale_download(path):
+    """True when `path` is a forecast this script downloaded earlier."""
+    try:
+        with rasterio.open(path) as src:
+            return DOWNLOAD_TAG in src.tags()
+    except Exception:
+        return False
+
+
+def download_forecast(forecast, mu_path, var_path):
+    """Save the forecast's mu and var as two GeoTIFFs.
+
+    Downloaded on the forecast's own grid, not the analysis grid, because
+    forecast.py does that step itself. Empty cells are written as NODATA
+    and flagged as such, so they read as missing rather than as zero
+    rainfall with zero uncertainty.
+    """
+    image = ee.Image(forecast["id"])
+    for band, path in (("mu", mu_path), ("var", var_path)):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        url = (image.select(band).toFloat().unmask(NODATA)
+               .getDownloadURL({"format": "GEO_TIFF"}))
+        response = requests.get(url, timeout=300)
+        response.raise_for_status()
+        path.write_bytes(response.content)
+        with rasterio.open(path, "r+") as dst:
+            dst.nodata = NODATA
+            dst.set_band_description(1, band)
+            dst.update_tags(**{DOWNLOAD_TAG: forecast["id"]})
+        print(f"  wrote {path}")
+
+
+def get_forecast(spec, country, base_dir):
+    """Download this country's forecast, if there is one to get.
+
+    Returns (have_forecast, season) where season is the forecast's own
+    (start, length, label, source) or None. A forecast that cannot be
+    found is reported, not fatal: the bulletin goes out without the
+    forecast slides rather than not at all.
+    """
+    paths = [base_dir / spec[k] for k in ("forecast_mu", "forecast_var")
+             if spec.get(k)]
+    folder = spec.get("forecast_folder")
+    if not folder:
+        return all(p.exists() for p in paths) and len(paths) == 2, None
+
+    print(f"\nLooking for the {country.upper()} forecast in {folder} ...")
+    forecast, reason = find_forecast(folder, country)
+    if forecast:
+        print(f"  using {forecast['name']}")
+        download_forecast(forecast, *paths)
+        return True, forecast_season(forecast)
+
+    print(f"  no forecast: {reason}")
+    for path in paths:
+        if path.exists() and stale_download(path):
+            path.unlink()
+            print(f"  removed {path}, an earlier download, so an old "
+                  f"forecast is not reused")
+    if len(paths) == 2 and all(p.exists() for p in paths):
+        print("  using the forecast files already in "
+              f"{paths[0].parent.relative_to(base_dir)}/ instead")
+        return True, None
+    return False, None
 
 
 def pentad_means(collection, region, start, end, scale):
@@ -491,8 +684,33 @@ def main(argv=None):
               f"{cell:g} degrees\n  over {grid['bounds']}")
     bounds = ee.Geometry.Rectangle(grid["bounds"], None, False)
 
-    start_day, length = season_spec(spec)
-    print(f"Season: day {start_day} of the year, {length} days long")
+    # The forecast itself. Written to the same paths a hand-copied file
+    # would sit at, so forecast.py reads it the same way and never needs
+    # Earth Engine. Without one there is nothing to compare rainfall
+    # against, so stop here and let the bulletin go out without it.
+    have_forecast, season = get_forecast(spec, region_cfg["filter_value"],
+                                         base_dir)
+    if not have_forecast:
+        print("\nNo forecast, so the forecast slides will be left out. "
+              "Nothing else to pull.")
+        return
+
+    # The season comes from the forecast when it says, so the two can
+    # never disagree. The config is the fallback.
+    season_label = spec.get("season", "")
+    season_year = spec.get("season_year")
+    if season:
+        season_start, length, season_label, source = season
+        start_day = season_start.timetuple().tm_yday
+        season_year = season_start.year
+        print(f"\nSeason {season_label} from the forecast's {source}")
+        if spec.get("season") and spec["season"] != season_label:
+            print(f"  the config says {spec['season']}; going with the "
+                  f"forecast")
+    else:
+        start_day, length = season_spec(spec)
+        print(f"\nSeason from the config: {season_label or 'unlabelled'}")
+    print(f"  day {start_day} of the year, {length} days long")
 
     chirps = ee.ImageCollection(CHIRPS).select("precipitation")
     latest = latest_date(chirps)
@@ -521,7 +739,7 @@ def main(argv=None):
     years = list(range(clim_start, clim_end + 1))
     print(f"Historical years: {years[0]} to {years[-1]} ({len(years)} of them)")
 
-    this_year = spec.get("season_year") or current_latest.year
+    this_year = season_year or current_latest.year
     this_year = int(this_year)
     season_start, season_end = season_dates(this_year, start_day, length)
     print(f"Monitoring {this_year}: {season_start} to {season_end}")
@@ -663,6 +881,7 @@ def main(argv=None):
 
     record = {
         "region": region_cfg["name"],
+        "season_label": season_label,
         "season_start_day": start_day,
         "season_length": length,
         "season_start": season_start.isoformat(),
