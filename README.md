@@ -330,16 +330,13 @@ for running on demand. The 10th because rainfall data lags about four
 weeks.
 
 It signs in with the service account, so it does not depend on anyone's
-personal account. Set these in the repository settings:
+personal account. The key goes in the repository settings, under
+Secrets, as `EE_SERVICE_ACCOUNT_KEY_JSON`: the whole key file as text.
+GitHub encrypts it and it cannot be read back, only replaced.
 
-| where | name | value |
-|---|---|---|
-| Secrets | `EE_SERVICE_ACCOUNT_KEY_JSON` | the whole key file as text |
-| Variables | `EE_PROJECT` | the cloud project id |
-| Variables | `EE_SERVICE_ACCOUNT_EMAIL` | the service account address |
-
-Only the first is a secret. GitHub encrypts it and it cannot be read
-back, only replaced.
+The project id and the service account address are typed at the top of
+the workflow file. They are not secret; without the key they let
+nobody in.
 
 It runs once per country listed under `matrix.country` in the workflow,
 side by side, and uploads one artifact each, `bulletin-yemen` and so
@@ -348,7 +345,8 @@ on. One country failing does not stop the others.
 The run installs dependencies and LibreOffice, writes the key to a temp
 file, then runs the pipeline and uploads the deck and PDF as artifacts,
 kept 90 days. When a country has no forecast, `observed.py`
-says so and the bulletin still builds without the forecast slides.
+says so and the bulletin still builds without the forecast slides. The service account needs read access to
+the forecast asset.
 
 Edit the `cron` line to change the schedule. Delete the `schedule` block
 to keep the button but stop it running on its own. A failed run emails

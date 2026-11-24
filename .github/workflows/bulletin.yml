@@ -24,16 +24,10 @@ jobs:
         country: [yemen, ethiopia]
 
     env:
-      # Repository variables, not secrets. Set them under Settings,
-      # Secrets and variables, Actions, Variables tab. Neither is
-      # sensitive; they are variables so this file carries no one
-      # organisation's project id.
-      #
-      # Only contexts GitHub allows at job level belong here. The runner
-      # context is not one of them, so the key path is set by the step
-      # that writes the key rather than declared up here.
-      EE_PROJECT: ${{ vars.EE_PROJECT }}
-      EE_SERVICE_ACCOUNT_EMAIL: ${{ vars.EE_SERVICE_ACCOUNT_EMAIL }}
+      # Typed here, as on main. Neither is sensitive: without the key,
+      # which is a secret, knowing them lets nobody in.
+      EE_PROJECT: desdr-510913
+      EE_SERVICE_ACCOUNT_EMAIL: seasonal-monitoring@desdr-510913.iam.gserviceaccount.com
 
     steps:
       - uses: actions/checkout@v5
@@ -42,21 +36,6 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-
-      - name: Check the Earth Engine settings
-        # Fail here with a plain sentence rather than several steps
-        # later with an Earth Engine error that does not say what is
-        # actually missing.
-        run: |
-          [ -n "$EE_PROJECT" ] || {
-            echo "::error::Repository variable EE_PROJECT is not set."
-            exit 1
-          }
-          [ -n "$EE_SERVICE_ACCOUNT_EMAIL" ] || {
-            echo "::error::Repository variable EE_SERVICE_ACCOUNT_EMAIL is not set."
-            exit 1
-          }
-          echo "Project $EE_PROJECT"
 
       - name: Install dependencies
         run: pip install -r requirements.txt
