@@ -80,7 +80,7 @@ jobs:
         run: python build_deck.py --pdf --config configs/${{ matrix.country }}.yaml
 
       - name: Upload the bulletin
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           # Named per country, or the second job would overwrite the first.
           name: bulletin-${{ matrix.country }}
